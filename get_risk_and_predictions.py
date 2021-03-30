@@ -1,4 +1,5 @@
 '''
+Version 11
 This code has been tested on Python3.6 and can take more that hour to execute.
 In this script, we calculate the intensity score and predictions (cases and deaths) for COVID-19 in different regions.
 The base tables used are rto.daily_global, rto.daily_us, rto.daily_india, rto.country_population, rto.population_us and rto.population_india_states.
