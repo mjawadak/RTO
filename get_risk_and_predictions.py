@@ -309,6 +309,17 @@ WINDOW = 30
 def get_predictions_sigmoid(x,alpha,lamda = 1,beta = 0):
     cases = (lamda / (1 + np.exp(-alpha*(x-beta))))
     return cases
+def cost_predictions(params):
+    y = get_predictions_sigmoid(np.arange(0,len(actual),1),params[0],params[1],params[2])
+    
+    # in case fitting on diff is required
+    y = np.diff(y)
+    actual2= np.diff(actual)
+    #actual = np.diff(actual)
+    f = [forget_factor**i for i in range(len(actual2))][::-1]
+    
+    return np.sum(f[-WINDOW:]*(y[-WINDOW:] - actual2[-WINDOW:])**2)
+
 def cost_actual(params):
     y = get_predictions_sigmoid(np.arange(0,len(actual),1),params[0],params[1],params[2])
     
