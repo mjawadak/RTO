@@ -28,7 +28,6 @@ delete from rto.regional_intensity_profiling where "date">'2021-02-27';
 delete from rto.intensity_fixed_params where date_of_calc > '2021-02-27'
 '''
 
-import c3aidatalake
 import datetime
 import pandas as pd
 import numpy as np
@@ -42,34 +41,6 @@ import datetime
 import sys
 from teradataml import create_context,remove_context,copy_to_sql,DataFrame
 
-# for risk profiling
-
-def get_country_data(country):
-    today = datetime.date.today()-datetime.timedelta(days=1)#pd.Timestamp.now().strftime("%Y-%m-%d")
-    today = today.strftime("%Y-%m-%d")
-    #print(today)
-    casecounts = c3aidatalake.evalmetrics(
-        "outbreaklocation",
-        {
-            "spec" : {
-                "ids" : [country],
-                "expressions" : ["JHU_ConfirmedCases", "JHU_ConfirmedDeaths", "JHU_ConfirmedRecoveries"],
-                "start" : "2020-01-01",
-                "end" : today,
-                "interval" : "DAY",
-            }
-        }
-    )
-    
-    casecounts = casecounts.rename(columns={"{}.JHU_ConfirmedCases.data".format(country):"JHU_ConfirmedCases.data",
-                               "{}.JHU_ConfirmedCases.missing".format(country):"JHU_ConfirmedCases.missing",
-                               "{}.JHU_ConfirmedDeaths.data".format(country):"JHU_ConfirmedDeaths.data",
-                               "{}.JHU_ConfirmedDeaths.missing".format(country):"JHU_ConfirmedDeaths.missing",
-                               "{}.JHU_ConfirmedRecoveries.data".format(country):"JHU_ConfirmedRecoveries.data",
-                               "{}.JHU_ConfirmedRecoveries.missing".format(country):"JHU_ConfirmedRecoveries.missing",
-                              })
-    #actual = casecounts["{}.JHU_ConfirmedCases.data".format(country)].values
-    return casecounts
 
 
 def func(t, A, lamda): # y = A*exp(lambda*t)
