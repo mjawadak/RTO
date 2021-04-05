@@ -426,8 +426,8 @@ for date_to_pred in dates_to_pred:
                 alpha,lamda,beta = res.x
                 
                 #print(win,fg,alpha,lamda,beta,res.fun,res.fun/win)
-                if res.fun/win < best_score and alpha_best > 0.01:
-                    best_score = res.fun/win
+                if res.fun < best_score and (alpha_best > 0.01 or alpha > 0.01):
+                    best_score = res.fun
                     alpha_best,lamda_best,beta_best = alpha,lamda,beta
                     win_best,fg_best = win,fg
         
@@ -541,7 +541,7 @@ for date_to_pred in dates_to_pred:
     print(max_date_cases)
     end_dates_countries = []
     predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
-    WINDOWS = [30]#np.arange(30,60)
+    WINDOWS = [60,30]#np.arange(30,60)
     FORGET_FACTORS=[0.9,0.85]#[0.9,0.95,0.99]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
@@ -565,8 +565,8 @@ for date_to_pred in dates_to_pred:
                 alpha,lamda,beta = res.x
                 
                 #print(win,fg,alpha,lamda,beta,res.fun,res.fun/win)
-                if res.fun/win < best_score and alpha_best > 0.01:
-                    best_score = res.fun/win
+                if res.fun < best_score and (alpha_best > 0.01 or alpha > 0.01):
+                    best_score = res.fun
                     alpha_best,lamda_best,beta_best = alpha,lamda,beta
                     win_best,fg_best = win,fg
                     
