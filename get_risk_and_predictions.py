@@ -321,15 +321,22 @@ def cost_predictions(params):
     return np.sum(f[-WINDOW:]*(y[-WINDOW:] - actual2[-WINDOW:])**2)
 
 def cost_actual(params):
-    y = get_predictions_sigmoid(np.arange(0,len(actual),1),params[0],params[1],params[2])
-    
+    y = get_predictions_sigmoid(np.arange(0,len(actual)+365,1),params[0],params[1],params[2])
+    is_growing = False
     # in case fitting on diff is required
     y = np.diff(y)
     actual2= np.diff(actual)
     #actual = np.diff(actual)
-    f = [forget_factor**i for i in range(len(actual2))][::-1]
-    
-    return np.sum((y[-window_for_averaging:] - actual2[-window_for_averaging:])**2)
+    start_pred_val = y[-window_for_averaging] 
+    max_pred_val = max(y)
+    if start_pred_val < max_pred_val:
+        is_growing = True
+    last_actual_val = np.max(np.diff(actual_all)[-window_for_averaging:])
+    #print(start_pred_val,max_pred_val,last_actual_val,len(y))
+    if is_growing == True and last_actual_val > max_pred_val:
+        return 100000000000000
+        
+    return np.sum((y[len(actual)-window_for_averaging:len(actual)] - actual2[-window_for_averaging:])**2)
 
 dates = pd.date_range(start='2020-01-22', end = '2023-06-01')
 def get_end_date(p_data):
@@ -403,8 +410,9 @@ for date_to_pred in dates_to_pred:
     print(max_date_cases)
     end_dates_countries = []
     predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
-    WINDOWS = [30]#np.arange(30,60)
-    FORGET_FACTORS=[0.9,0.85]#[0.9,0.95,0.99]
+    WINDOWS = [60]#np.arange(30,60)
+    FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
+    MA_WINDOWS = [2,7,14]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
     for country,country_of_state,population in regions.values:
@@ -417,19 +425,21 @@ for date_to_pred in dates_to_pred:
         best_score = np.inf
         alpha_best,lamda_best,beta_best=0.02,0,0
         win_best,fg_best =0,0
-        for fg in FORGET_FACTORS:
-            forget_factor = fg
-            
-            for win in WINDOWS:
-                WINDOW = win
-                res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
-                alpha,lamda,beta = res.x
-                
-                #print(win,fg,alpha,lamda,beta,res.fun,res.fun/win)
-                if res.fun < best_score and (alpha_best > 0.01 or alpha > 0.01):
-                    best_score = res.fun
-                    alpha_best,lamda_best,beta_best = alpha,lamda,beta
-                    win_best,fg_best = win,fg
+        for ma_win in MA_WINDOWS:
+            for fg in FORGET_FACTORS:
+                forget_factor = fg
+
+                for win in WINDOWS:
+                    WINDOW = win
+                    actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                    res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
+                    alpha,lamda,beta = res.x
+                    current_score = cost_actual([alpha,lamda,beta])
+                    #print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                    if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
+                        best_score = current_score
+                        alpha_best,lamda_best,beta_best = alpha,lamda,beta
+                        win_best,fg_best = win,fg
         
         print("best",win_best,fg_best,alpha_best,lamda_best,beta_best,"best_score=",best_score)
         end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
@@ -542,7 +552,8 @@ for date_to_pred in dates_to_pred:
     end_dates_countries = []
     predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
     WINDOWS = [60,30]#np.arange(30,60)
-    FORGET_FACTORS=[0.9,0.85]#[0.9,0.95,0.99]
+    FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
+    MA_WINDOWS = [2,7,14]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
     for country,country_of_state,population in regions.values:
@@ -556,19 +567,21 @@ for date_to_pred in dates_to_pred:
         best_score = np.inf
         alpha_best,lamda_best,beta_best=0.02,0,0
         win_best,fg_best =0,0
-        for fg in FORGET_FACTORS:
-            forget_factor = fg
-            
-            for win in WINDOWS:
-                WINDOW = win
-                res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
-                alpha,lamda,beta = res.x
-                
-                #print(win,fg,alpha,lamda,beta,res.fun,res.fun/win)
-                if res.fun < best_score and (alpha_best > 0.01 or alpha > 0.01):
-                    best_score = res.fun
-                    alpha_best,lamda_best,beta_best = alpha,lamda,beta
-                    win_best,fg_best = win,fg
+        for ma_win in MA_WINDOWS:
+            for fg in FORGET_FACTORS:
+                forget_factor = fg
+
+                for win in WINDOWS:
+                    WINDOW = win
+                    actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                    res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
+                    alpha,lamda,beta = res.x
+                    current_score = cost_actual([alpha,lamda,beta])
+                    #print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                    if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
+                        best_score = current_score
+                        alpha_best,lamda_best,beta_best = alpha,lamda,beta
+                        win_best,fg_best = win,fg
                     
         print("best",win_best,fg_best,alpha_best,lamda_best,beta_best,"best_score=",best_score)       
         end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
