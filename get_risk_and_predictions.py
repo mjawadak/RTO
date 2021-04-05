@@ -1,5 +1,5 @@
 '''
-Version 11
+Version 11 optimizing on daily difference
 This code has been tested on Python3.6 and can take more that hour to execute.
 In this script, we calculate the intensity score and predictions (cases and deaths) for COVID-19 in different regions.
 The base tables used are rto.daily_global, rto.daily_us, rto.daily_india, rto.country_population, rto.population_us and rto.population_india_states.
@@ -338,15 +338,16 @@ WINDOW = 30
 def get_predictions_sigmoid(x,alpha,lamda = 1,beta = 0):
     cases = (lamda / (1 + np.exp(-alpha*(x-beta))))
     return cases
-def cost_predictions(params):
+def cost_actual(params):
     y = get_predictions_sigmoid(np.arange(0,len(actual),1),params[0],params[1],params[2])
     
     # in case fitting on diff is required
-    #y = np.diff(y)
+    y = np.diff(y)
+    actual2= np.diff(actual)
     #actual = np.diff(actual)
-    f = [forget_factor**i for i in range(len(actual))][::-1]
+    f = [forget_factor**i for i in range(len(actual2))][::-1]
     
-    return np.sum(f[-WINDOW:]*(y[-WINDOW:] - actual[-WINDOW:])**2)
+    return np.sum((y[-window_for_averaging:] - actual2[-window_for_averaging:])**2)
 
 dates = pd.date_range(start='2020-01-22', end = '2023-06-01')
 def get_end_date(p_data):
@@ -421,7 +422,7 @@ for date_to_pred in dates_to_pred:
     end_dates_countries = []
     predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
     WINDOWS = [30]#np.arange(30,60)
-    FORGET_FACTORS=[0.9]#[0.9,0.95,0.99]
+    FORGET_FACTORS=[0.9,0.85]#[0.9,0.95,0.99]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
     for country,country_of_state,population in regions.values:
@@ -431,6 +432,9 @@ for date_to_pred in dates_to_pred:
         bounds = Bounds([0, np.max(actual),0], [2, 100*np.max(actual),500])#np.max(actual)/max_infected
             
         PREDICTIONS = []
+        best_score = np.inf
+        alpha_best,lamda_best,beta_best=0.02,0,0
+        win_best,fg_best =0,0
         for fg in FORGET_FACTORS:
             forget_factor = fg
             
@@ -438,13 +442,25 @@ for date_to_pred in dates_to_pred:
                 WINDOW = win
                 res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
                 alpha,lamda,beta = res.x
-                end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha,lamda,beta))
-                end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
-                predictions = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha,lamda,beta)
-                PREDICTIONS.append(predictions)
+                
+                #print(win,fg,alpha,lamda,beta,res.fun,res.fun/win)
+                if res.fun/win < best_score and alpha_best > 0.01:
+                    best_score = res.fun/win
+                    alpha_best,lamda_best,beta_best = alpha,lamda,beta
+                    win_best,fg_best = win,fg
+        
+        print("best",win_best,fg_best,alpha_best,lamda_best,beta_best,"best_score=",best_score)
+        end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
+        end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
+        predictions = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best)
+        PREDICTIONS.append(predictions)
 
         PREDICTIONS = np.array(PREDICTIONS)
         pred_mean,pred_up,pred_lower = conf_interval(PREDICTIONS)
+        
+        # Error correction for total cases
+        error_total_cases = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["confirmed"].tail(1).values[0] - pred_mean[window_for_averaging]
+        pred_mean = pred_mean + error_total_cases
         
         predictions = pd.DataFrame(pred_mean,columns=["pred_confirmed_cases"])
         predictions["Country/Region"] = country
@@ -544,7 +560,7 @@ for date_to_pred in dates_to_pred:
     end_dates_countries = []
     predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
     WINDOWS = [30]#np.arange(30,60)
-    FORGET_FACTORS=[0.9]#[0.9,0.95,0.99]
+    FORGET_FACTORS=[0.9,0.85]#[0.9,0.95,0.99]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
     for country,country_of_state,population in regions.values:
@@ -555,6 +571,9 @@ for date_to_pred in dates_to_pred:
         bounds = Bounds([0, np.max(actual),0], [2, 100*np.max(actual),500])#np.max(actual)/max_infected
             
         PREDICTIONS_DEATHS = []
+        best_score = np.inf
+        alpha_best,lamda_best,beta_best=0.02,0,0
+        win_best,fg_best =0,0
         for fg in FORGET_FACTORS:
             forget_factor = fg
             
@@ -562,13 +581,25 @@ for date_to_pred in dates_to_pred:
                 WINDOW = win
                 res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
                 alpha,lamda,beta = res.x
-                end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha,lamda,beta))
-                end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
-                predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha,lamda,beta)
-                PREDICTIONS_DEATHS.append(predictions_deaths)
-
+                
+                #print(win,fg,alpha,lamda,beta,res.fun,res.fun/win)
+                if res.fun/win < best_score and alpha_best > 0.01:
+                    best_score = res.fun/win
+                    alpha_best,lamda_best,beta_best = alpha,lamda,beta
+                    win_best,fg_best = win,fg
+                    
+        print("best",win_best,fg_best,alpha_best,lamda_best,beta_best,"best_score=",best_score)       
+        end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
+        end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
+        predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best)
+        PREDICTIONS_DEATHS.append(predictions_deaths)
+                
         PREDICTIONS_DEATHS = np.array(PREDICTIONS_DEATHS)
         pred_mean,pred_up,pred_lower = conf_interval(PREDICTIONS_DEATHS)
+        
+        # Error correction in total deaths
+        error_total_deaths = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["deaths"].tail(1).values[0] - pred_mean[window_for_averaging]
+        pred_mean = pred_mean + error_total_deaths
         
         predictions_deaths = pd.DataFrame(pred_mean,columns=["pred_deaths"])
         predictions_deaths["Country/Region"] = country
