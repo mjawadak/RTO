@@ -27,7 +27,7 @@ delete from rto.LG_predicted_deaths where date_of_calc >'2021-02-27';
 delete from rto.regional_intensity_profiling where "date">'2021-02-27';
 delete from rto.intensity_fixed_params where date_of_calc > '2021-02-27'
 '''
-
+import logging
 import datetime
 import pandas as pd
 import numpy as np
@@ -39,9 +39,18 @@ import teradatasql
 import getpass
 import datetime
 import sys
+import os
 from teradataml import create_context,remove_context,copy_to_sql,DataFrame
 
-
+# Initialize logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter("%(asctime)s - %(message)s")
+fh = logging.FileHandler('rto_script.log')
+fh.setFormatter(formatter)
+logger.addHandler(fh)
+#logger.info("starting")
+#exit()
 
 def func(t, A, lamda): # y = A*exp(lambda*t)
     y = A*np.exp(lamda*t)
@@ -176,7 +185,7 @@ df_cases
 
     
 ##################################################################################################################################
-
+logger.info("Data Fetched")
 
 ################################################## Calculate Risk ################################################################
 
@@ -191,18 +200,21 @@ if type(max_date_region_int_tab) == datetime.date:
     max_date_region_int_tab = max_date_region_int_tab.strftime("%Y-%m-%d")
 elif max_date_region_int_tab == None:
     max_date_region_int_tab = '2020-10-17'
-cur.execute("""
-select min(max_date) from
-(
-select max("date") as max_date from rto.daily_global 
-union all
-select max("date") as max_date from rto.daily_us
-union all 
-select max("date") as max_date from rto.daily_india
-union all 
-select max("date") as max_date from rto.daily_india_districts
-)as tmp;""")
-max_date_cases_tab = cur.fetchall()[0][0]
+if len(sys.argv) == 2:
+    max_date_cases_tab = datetime.datetime.strptime(sys.argv[1],"%Y-%m-%d").date()
+else:
+    cur.execute("""
+    select min(max_date) from
+    (
+    select max("date") as max_date from rto.daily_global 
+    union all
+    select max("date") as max_date from rto.daily_us
+    union all 
+    select max("date") as max_date from rto.daily_india
+    union all 
+    select max("date") as max_date from rto.daily_india_districts
+    )as tmp;""")
+    max_date_cases_tab = cur.fetchall()[0][0]
 if type(max_date_cases_tab) == datetime.date:
     max_date_cases_tab = max_date_cases_tab.strftime("%Y-%m-%d")
 
@@ -295,7 +307,7 @@ if max_date_cases_tab>=max_date_region_int_tab:
 #REGIONS_CURRENT = REGIONS
 
 ##################################################################################################################################
-
+logger.info("rto.regional_intensity_profiling' done. Risk Calculated till the latest date.")
 
 ###################################################### for prediction modeling #####################################################
 
@@ -327,16 +339,16 @@ def cost_actual(params):
     y = np.diff(y)
     actual2= np.diff(actual)
     #actual = np.diff(actual)
-    start_pred_val = y[-window_for_averaging] 
+    start_pred_val = y[-2*window_for_averaging] 
     max_pred_val = max(y)
     if start_pred_val < max_pred_val:
         is_growing = True
-    last_actual_val = np.max(np.diff(actual_all)[-window_for_averaging:])
+    last_actual_val = np.max(np.diff(actual_all)[-2*window_for_averaging:])
     #print(start_pred_val,max_pred_val,last_actual_val,len(y))
-    if is_growing == True and last_actual_val > max_pred_val:
+    if is_growing == True and last_actual_val > max_pred_val and last_actual_val > 100:
         return 100000000000000
         
-    return np.sum((y[len(actual)-window_for_averaging:len(actual)] - actual2[-window_for_averaging:])**2)
+    return np.sum((y[len(actual)-2*window_for_averaging:len(actual)] - actual2[-2*window_for_averaging:])**2)
 
 dates = pd.date_range(start='2020-01-22', end = '2023-06-01')
 def get_end_date(p_data):
@@ -379,17 +391,20 @@ create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="s
 max_date_previous=DataFrame.from_query("select max(date_of_calc) as max_date_previous from rto.LG_predicted_cases").to_pandas()
 max_date_previous=max_date_previous["max_date_previous"].values[0]
 
-MAX_DATE_CASES = DataFrame.from_query("""
-select min(max_date) as min_max_date from
-(
-select max("date") as max_date from rto.daily_global 
-union all
-select max("date") as max_date from rto.daily_us
-union all 
-select max("date") as max_date from rto.daily_india
-union all 
-select max("date") as max_date from rto.daily_india_districts
-)as tmp;""").to_pandas().iloc[0,0]
+if len(sys.argv) == 2:
+    MAX_DATE_CASES = datetime.datetime.strptime(sys.argv[1],"%Y-%m-%d").date()
+else:
+    MAX_DATE_CASES = DataFrame.from_query("""
+    select min(max_date) as min_max_date from
+    (
+    select max("date") as max_date from rto.daily_global 
+    union all
+    select max("date") as max_date from rto.daily_us
+    union all 
+    select max("date") as max_date from rto.daily_india
+    union all 
+    select max("date") as max_date from rto.daily_india_districts
+    )as tmp;""").to_pandas().iloc[0,0]
 
 
 dates_to_pred= pd.date_range(start=(max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"), 
@@ -412,7 +427,7 @@ for date_to_pred in dates_to_pred:
     predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
     WINDOWS = [60]#np.arange(30,60)
     FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
-    MA_WINDOWS = [2,7,14]
+    MA_WINDOWS = [7]#[2,7,14]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
     for country,country_of_state,population in regions.values:
@@ -527,7 +542,7 @@ cur.close()
 
 
 ###################################################################################################################################
-
+logger.info("rto.LG_predicted_cases, rto.LG_predicted_cases_with_conf done. Predictions (cases) done.")
 
 ############################################### Case predictions (Deaths): #########################################################
 
@@ -553,7 +568,7 @@ for date_to_pred in dates_to_pred:
     predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
     WINDOWS = [60,30]#np.arange(30,60)
     FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
-    MA_WINDOWS = [2,7,14]
+    MA_WINDOWS = [7]#[2,7,14]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
     for country,country_of_state,population in regions.values:
@@ -624,7 +639,7 @@ PRED_DEATHS_COUNTRIES
 
 
 ###################################################################################################################################
-
+logger.info("rto.LG_predicted_deaths updated. Predictions (deaths) done.")
 
 ############################################### TD Site Analysis Dashboard #########################################################
 
@@ -912,6 +927,7 @@ remove_context()
 REGIONS_MERGED
 
 ###################################################################################################################################
+logger.info("rto.regional_intensity_profiling_future done. Risk prediction for specific future dates.")
 
 
 ################################################# risk predictions for all countries #############################################
@@ -1089,6 +1105,7 @@ remove_context()
 
 
 ###################################################################################################################################
+logger.info("rto.regional_intensity_predictions done. Risk calculation for future 360 days.")
 
 ################################################# update the phase timelines table #############################################
 
@@ -1161,3 +1178,7 @@ on tmp5."Country/Region2" = tmp1."Country/Region" and tmp5.country_of_state2 = t
 cur.execute(sql_command)
 res = cur.fetchall()
 print("Script executed Successfully!")
+
+logger.info("rto.intensity_fixed_params done. Updated the phase timelines table.")
+logger.info("Script executed Successfully!")
+
