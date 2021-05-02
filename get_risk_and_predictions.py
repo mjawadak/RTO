@@ -581,7 +581,13 @@ for date_to_pred in dates_to_pred:
         actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].values
         #actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].rolling(window=14).mean().values)
         actual = actual_all#[0:i]
-        bounds = Bounds([0, np.max(actual),0], [2, 100*np.max(actual),500])#np.max(actual)/max_infected
+
+        # for setting the max bound for deaths based on case predictions
+        cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
+        mortality_rate = actual_all[-1]/cases[-1]
+        pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
+        bounds = Bounds([0, actual_all[-1],0], [2, mortality_rate*pred_cases[-1],500])#np.max(actual)/max_infected
+        
             
         PREDICTIONS_DEATHS = []
         best_score = np.inf
@@ -595,7 +601,7 @@ for date_to_pred in dates_to_pred:
                     WINDOW = win
                     #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
                     actual = savgol_filter(actual_all, ma_win, 2)
-                    res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
+                    res = optimize.minimize(fun=cost_predictions,x0=[0.05,actual_all[-1],200],bounds=bounds,method="L-BFGS-B")
                     alpha,lamda,beta = res.x
                     current_score = cost_actual([alpha,lamda,beta])
                     #print(ma_win,win,fg,alpha,lamda,beta,current_score)
@@ -617,7 +623,7 @@ for date_to_pred in dates_to_pred:
         error_total_deaths = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["deaths"].tail(1).values[0] - pred_mean[window_for_averaging]
         pred_mean = pred_mean + error_total_deaths
 
-
+        '''
         # for death prediction correction
         cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
         mortality_rate = actual_all[-1]/cases[-1]
@@ -632,10 +638,10 @@ for date_to_pred in dates_to_pred:
         corrected_deaths[corrected_deaths<0] = 0
 
         corrected_deaths = [pred_mean[0]] + list(corrected_deaths)
-        corrected_deaths = np.cumsum(corrected_deaths)
+        corrected_deaths = np.cumsum(corrected_deaths)'''
 
         
-        predictions_deaths = pd.DataFrame(corrected_deaths,columns=["pred_deaths"])
+        predictions_deaths = pd.DataFrame(pred_mean,columns=["pred_deaths"])
         predictions_deaths["Country/Region"] = country
         predictions_deaths["country_of_state"] = country_of_state
         predictions_deaths["date_of_calc"] = max_date_cases
