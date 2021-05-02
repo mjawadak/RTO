@@ -1,5 +1,5 @@
 '''
-Version 11 optimizing on daily difference
+Version: optimizing on daily difference with death correction and SG_Filter
 This code has been tested on Python3.6 and can take more that hour to execute.
 In this script, we calculate the intensity score and predictions (cases and deaths) for COVID-19 in different regions.
 The base tables used are rto.daily_global, rto.daily_us, rto.daily_india, rto.country_population, rto.population_us and rto.population_india_states.
@@ -428,7 +428,7 @@ for date_to_pred in dates_to_pred:
     predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
     WINDOWS = [60]#np.arange(30,60)
     FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
-    MA_WINDOWS = [7]#[2,7,14]
+    MA_WINDOWS = [3,7,15]#[2,7,14]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
     for country,country_of_state,population in regions.values:
@@ -447,7 +447,8 @@ for date_to_pred in dates_to_pred:
 
                 for win in WINDOWS:
                     WINDOW = win
-                    actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                    #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                    actual = savgol_filter(actual_all, ma_win, 2)
                     res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
                     alpha,lamda,beta = res.x
                     current_score = cost_actual([alpha,lamda,beta])
@@ -569,7 +570,7 @@ for date_to_pred in dates_to_pred:
     predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
     WINDOWS = [60]#np.arange(30,60)
     FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
-    MA_WINDOWS = [7]#[2,7,14]
+    MA_WINDOWS = [3,7,15]#[2,7,14]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
     for country,country_of_state,population in regions.values:
@@ -589,7 +590,8 @@ for date_to_pred in dates_to_pred:
 
                 for win in WINDOWS:
                     WINDOW = win
-                    actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                    #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                    actual = savgol_filter(actual_all, ma_win, 2)
                     res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
                     alpha,lamda,beta = res.x
                     current_score = cost_actual([alpha,lamda,beta])
@@ -611,8 +613,26 @@ for date_to_pred in dates_to_pred:
         # Error correction in total deaths
         error_total_deaths = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["deaths"].tail(1).values[0] - pred_mean[window_for_averaging]
         pred_mean = pred_mean + error_total_deaths
+
+
+        # for death prediction correction
+        cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
+        mortality_rate = actual_all[-1]/cases[-1]
+        #print(mortality_rate,"mor")
+        #print(len(pred_mean),len(correcion_factor_deaths))
+        pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
+        correcion_factor_deaths = 0.5
+        corrected_deaths = correcion_factor_deaths*pred_mean + (1-correcion_factor_deaths)*pred_cases*mortality_rate
         
-        predictions_deaths = pd.DataFrame(pred_mean,columns=["pred_deaths"])
+        _start_total_death_pred = pred_mean[0]
+        corrected_deaths = np.diff(corrected_deaths)
+        corrected_deaths[corrected_deaths<0] = 0
+
+        corrected_deaths = [pred_mean[0]] + list(corrected_deaths)
+        corrected_deaths = np.cumsum(corrected_deaths)
+
+        
+        predictions_deaths = pd.DataFrame(corrected_deaths,columns=["pred_deaths"])
         predictions_deaths["Country/Region"] = country
         predictions_deaths["country_of_state"] = country_of_state
         predictions_deaths["date_of_calc"] = max_date_cases
