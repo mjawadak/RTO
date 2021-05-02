@@ -340,16 +340,19 @@ def cost_actual(params):
     y = np.diff(y)
     actual2= np.diff(actual)
     #actual = np.diff(actual)
-    start_pred_val = y[-2*window_for_averaging] 
+    win_actual = 2*window_for_averaging
+    start_pred_val = y[-win_actual] 
     max_pred_val = max(y)
     if start_pred_val < max_pred_val:
         is_growing = True
-    last_actual_val = np.max(np.diff(actual_all)[-2*window_for_averaging:])
+    
+    
+    last_actual_val = np.max(np.diff(actual_all)[-win_actual:])
     #print(start_pred_val,max_pred_val,last_actual_val,len(y))
-    if is_growing == True and last_actual_val > max_pred_val and last_actual_val > 100:
-        return 100000000000000
+    #if is_growing == True and last_actual_val > max_pred_val and last_actual_val > 100:
+    #    return 100000000000000
         
-    return np.sum((y[len(actual)-2*window_for_averaging:len(actual)] - actual2[-2*window_for_averaging:])**2)
+    return np.sum((y[len(actual)-win_actual:len(actual)] - actual2[-win_actual:])**2)
 
 dates = pd.date_range(start='2020-01-22', end = '2023-06-01')
 def get_end_date(p_data):
