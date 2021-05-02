@@ -41,6 +41,7 @@ import datetime
 import sys
 import os
 from teradataml import create_context,remove_context,copy_to_sql,DataFrame
+from scipy.signal import savgol_filter
 
 # Initialize logging
 logger = logging.getLogger()
@@ -566,7 +567,7 @@ for date_to_pred in dates_to_pred:
     print(max_date_cases)
     end_dates_countries = []
     predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
-    WINDOWS = [60,30]#np.arange(30,60)
+    WINDOWS = [60]#np.arange(30,60)
     FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
     MA_WINDOWS = [7]#[2,7,14]
         
