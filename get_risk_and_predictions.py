@@ -19,13 +19,13 @@ select cast(max("date") as date) from rto.regional_intensity_profiling
 
 After successful exection of the script, "Script executed Successfully!" should be printed out. In case of any errors, revert back using the below script (update the date):
 
-delete from  rto.regional_intensity_predictions where date_of_calc >'2021-02-27';
-delete from rto.regional_intensity_profiling_future where date_of_calc >'2021-02-27';
-delete from rto.LG_predicted_cases where date_of_calc >'2021-02-27';
-delete from rto.LG_predicted_cases_with_conf where date_of_calc >'2021-02-27';
-delete from rto.LG_predicted_deaths where date_of_calc >'2021-02-27';
-delete from rto.regional_intensity_profiling where "date">'2021-02-27';
-delete from rto.intensity_fixed_params where date_of_calc > '2021-02-27'
+delete from rto.regional_intensity_predictions where date_of_calc >'2021-06-15';
+delete from rto.regional_intensity_profiling_future where date_of_calc >'2021-06-15';
+delete from rto.LG_predicted_cases where date_of_calc >'2021-06-15';
+delete from rto.LG_predicted_cases_with_conf where date_of_calc >'2021-06-15';
+delete from rto.LG_predicted_deaths where date_of_calc >'2021-06-15';
+delete from rto.regional_intensity_profiling where "date">'2021-06-15';
+delete from rto.intensity_fixed_params where date_of_calc > '2021-06-15'
 '''
 import logging
 import datetime
@@ -146,7 +146,7 @@ union all
 
 select "date",a.state,country_of_state, confirmed, deaths, population from
 (select "date",state,'India' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india group by 1,2,3) a
-inner join (select state,population from rto.population_india_states where state = 'Telengana') b
+inner join (select state,population from rto.population_india_states where state = 'Telangana') b
 on a.state = b.state
 
 union all
@@ -704,7 +704,7 @@ select aaa.*,ddd.country_of_state,ddd."date",ddd.pred_confirmed_cases as confirm
     inner join
     (select * from rto.td_sites where country_region ='India') bb
     on aa.state = bb.state_province
-    where state = 'Telengana'
+    where state = 'Telangana'
 
     union all 
 
@@ -927,17 +927,22 @@ for country,country_of_state,is_TD,population in countries.values:
 #print(country,",",country_of_state)
     reg_country = REGIONS_CURRENT[(REGIONS_CURRENT["Country/Region"]==country) & (REGIONS_CURRENT["country_of_state"] == country_of_state)]
     #print(reg_country)
+    _append_empty = [] # in case of no historical values
+    for i in range(4-reg_country.shape[0]):
+        _append_empty.append(None)
+    print(_append_empty)
+    
     row=[country,
        country_of_state,
        population,
         min_date_for_future_risk.strftime("%Y-%m-%d"),
        #max_date_cases.strftime("%Y-%m-%d"),
        is_TD]+\
-    list(reg_country["daily_cases_per_M"].values.T)\
-    +list(reg_country["daily_deaths_per_M"].values.T)\
-    +list(reg_country["Re"].values.T)\
-    +list(reg_country["growth_rate"].values.T)\
-    +list(reg_country["growth_rate_deaths"].values.T)
+    list(reg_country["daily_cases_per_M"].values.T) + _append_empty\
+    +list(reg_country["daily_deaths_per_M"].values.T) + _append_empty\
+    +list(reg_country["Re"].values.T) + _append_empty\
+    +list(reg_country["growth_rate"].values.T) + _append_empty\
+    +list(reg_country["growth_rate_deaths"].values.T) + _append_empty
     REGIONS_PIVOTED2.append(row)
     #print(row)
 REGIONS_PIVOTED2 = pd.DataFrame(REGIONS_PIVOTED2,columns=cols)
