@@ -1162,30 +1162,34 @@ growth_rate,
 growth_rate_deaths,
 Re,
 
--LN((cast(2.0 as float)/(0.99+1.0))-1)/(10.0) as alpha_cases_sql
+-LN((cast(2.0 as float)/(0.99+1.0))-1)/(20.0) as alpha_cases_sql
 ,(2.0 / (1 + EXP(-alpha_cases_sql*(daily_cases_per_M/10)))) - 1.0 as risk_factor_cases_sql
 
-,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(0.1) as alpha_deaths_sql
+,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(0.4) as alpha_deaths_sql
 ,(2.0 / (1 + EXP(-alpha_deaths_sql*(daily_deaths_per_M/10)))) - 1.0 as risk_factor_deaths_sql
 
-,-LN((cast(1.0 as float)/(0.99))-1)/(0.14) as alpha_growth_rate_sql
+,-LN((cast(1.0 as float)/(0.99))-1)/(0.2) as alpha_growth_rate_sql
 ,(1.0 / (1 + EXP(-alpha_growth_rate_sql*(growth_rate)))) as risk_factor_growth_rate_sql
 
-,-LN((cast(1.0 as float)/(0.99))-1)/(0.14) as alpha_growth_rate_deaths_sql
+,-LN((cast(1.0 as float)/(0.99))-1)/(0.2) as alpha_growth_rate_deaths_sql
 ,(1.0 / (1 + EXP(-alpha_growth_rate_deaths_sql*(growth_rate_deaths)))) as risk_factor_growth_rate_deaths_sql
 
-,-LN((cast(1.0 as float)/(0.99))-1)/(1.2-1.0) as alpha_Re_sql
+,-LN((cast(1.0 as float)/(0.99))-1)/(1.4-1.0) as alpha_Re_sql
 ,(1.0 / (1 + EXP(-alpha_Re_sql*(Re-1.0)))) as risk_factor_Re_sql
 
+,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(0.75) as alpha_vacc_sql
+,1  - ( (2.0 / (1 + EXP(-alpha_vacc_sql*pred_vacc_perc))) - 1.0) as risk_factor_vacc_sql
 
-,(2*risk_factor_cases_sql+
+
+,(4*risk_factor_cases_sql+
 1*risk_factor_cases_sql*risk_factor_growth_rate_sql + 
-3*risk_factor_deaths_sql+
+4*risk_factor_deaths_sql+
 1*risk_factor_deaths_sql*risk_factor_growth_rate_deaths_sql + 
-1*risk_factor_cases_sql*risk_factor_Re_sql)/
-(2+1+3+1+1) as risk
+1*risk_factor_cases_sql*risk_factor_Re_sql +
+4*risk_factor_vacc_sql)/
+(4+1+4+1+1+4) as risk
 
-from rto.regional_intensity_predictions where date_of_calc = (select max(date_of_calc) from rto.regional_intensity_predictions)
+from rto.regional_intensity_pred_with_vacc_view
 
 ) tmp1
 inner join 
