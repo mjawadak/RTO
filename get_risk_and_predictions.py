@@ -1,5 +1,5 @@
 '''
-Version: optimizing on daily difference with death correction and SG_Filter
+Version: optimizing on daily difference with death correction and SG_Filter, optimizing with vacc data as well
 This code has been tested on Python3.6 and can take more that hour to execute.
 In this script, we calculate the intensity score and predictions (cases and deaths) for COVID-19 in different regions.
 The base tables used are rto.daily_global, rto.daily_us, rto.daily_india, rto.country_population, rto.population_us and rto.population_india_states.
@@ -122,52 +122,62 @@ connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACC
 cur = connection.cursor()
 
 cur.execute("""
-select "date","Country/Region",country_of_state,confirmed,deaths,pop_country as population from
-(select "date",
-case
-when "Country/Region" = 'Korea, South' then 'South Korea' 
-when "Country/Region" = 'Czechia' then 'Czech Republic'
-when "Country/Region" = 'US' then 'United States'
-when "Country/Region" = 'Taiwan*' then 'Taiwan' 
-else "Country/Region" end as "Country/Region",
-cast('' as varchar(30)) as country_of_state,
-sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_global group by 1,2,3) a
-left join rto.country_population
-on country = "Country/Region"
-
-union all
-
-select "date",Province_state,country_of_state, confirmed, deaths, population from
-(select "date",Province_state,country_region as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_us group by 1,2,3) a
-left join (select state,sum(population) as population from rto.population_us group by 1) b
-on Province_state = state
-
-union all
-
-select "date",a.state,country_of_state, confirmed, deaths, population from
-(select "date",state,'India' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india group by 1,2,3) a
-inner join (select state,population from rto.population_india_states where state = 'Telangana') b
-on a.state = b.state
-
-union all
-
-select "date",a.district,country_of_state, confirmed, deaths, population from
-(select "date",district,'India_district' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india_districts group by 1,2,3) a
-inner join (select district,population from rto.population_india_districts where district <>  'Hyderabad') b
-on a.district = b.district
-
-union all 
-
-select "date",county as "Country/Region",'US_county' as country_of_state,confirmed,deaths,population as population from rto.daily_us
-inner join
+select main_data.*,vacc_data.pred_vacc_perc as vacc_perc from 
 (
-    select * from 
-    (select distinct(county_district) as county1,state_province,city,country_region from rto.td_sites where country_region='US') a
-    inner join 
-    (select * from rto.population_us) b
-    on a.county1 = b.county and state_province = state
-) a
-on admin2=county and province_state=state
+    select "date","Country/Region",country_of_state,confirmed,deaths,pop_country as population from
+    (select "date",
+    case
+    when "Country/Region" = 'Korea, South' then 'South Korea' 
+    when "Country/Region" = 'Czechia' then 'Czech Republic'
+    when "Country/Region" = 'US' then 'United States'
+    when "Country/Region" = 'Taiwan*' then 'Taiwan' 
+    else "Country/Region" end as "Country/Region",
+    cast('' as varchar(30)) as country_of_state,
+    sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_global group by 1,2,3) a
+    left join rto.country_population
+    on country = "Country/Region"
+
+    union all
+
+    select "date",Province_state,country_of_state, confirmed, deaths, population from
+    (select "date",Province_state,country_region as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_us group by 1,2,3) a
+    left join (select state,sum(population) as population from rto.population_us group by 1) b
+    on Province_state = state
+
+    union all
+
+    select "date",a.state,country_of_state, confirmed, deaths, population from
+    (select "date",state,'India' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india group by 1,2,3) a
+    inner join (select state,population from rto.population_india_states where state = 'Telangana') b
+    on a.state = b.state
+
+    union all
+
+    select "date",a.district,country_of_state, confirmed, deaths, population from
+    (select "date",district,'India_district' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india_districts group by 1,2,3) a
+    inner join (select district,population from rto.population_india_districts where district <>  'Hyderabad') b
+    on a.district = b.district
+
+    union all 
+
+    select "date",county as "Country/Region",'US_county' as country_of_state,confirmed,deaths,population as population from rto.daily_us
+    inner join
+    (
+        select * from 
+        (select distinct(county_district) as county1,state_province,city,country_region from rto.td_sites where country_region='US') a
+        inner join 
+        (select * from rto.population_us) b
+        on a.county1 = b.county and state_province = state
+    ) a
+    on admin2=county and province_state=state
+) main_data
+
+left join (
+select distinct "Country/Region",country_of_state, pred_vacc_perc from rto.regional_intensity_pred_with_vacc_view 
+where date_of_calc = (select max(date_of_calc) from rto.regional_intensity_pred_with_vacc_view) and date_of_calc = "date"
+) vacc_data
+on main_data."Country/Region" = vacc_data."Country/Region" and main_data.country_of_state = vacc_data.country_of_state
+
 order by 1;
 """)
 res = cur.fetchall()
@@ -304,7 +314,9 @@ if max_date_cases_tab>=max_date_region_int_tab:
     create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
     copy_to_sql(df=REGIONS,table_name="regional_intensity_profiling",schema_name="rto",if_exists="append",primary_index="Country/Region")
     remove_context()
-
+else:
+    print("Script already executed till the latest date")
+    sys.exit()
 #REGIONS_CURRENT = REGIONS
 
 ##################################################################################################################################
@@ -385,6 +397,9 @@ def conf_interval(d,z_t="t"):
 
 ############################################################# Case predictions: ####################################################
 
+from matplotlib.backends.backend_pdf import PdfPages  
+pp = PdfPages('predictions.pdf')
+
 # Case predictions:
 print("Calculating Predictions")
 
@@ -418,7 +433,7 @@ dates_to_pred
 END_DATES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
 PRED_CASES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
 
-regions = df_cases[["Country/Region","country_of_state","population"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
+regions = df_cases[["Country/Region","country_of_state","population","vacc_perc"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
 
 #create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
 #dates_to_pred= pd.date_range(start='2020-10-17', end = '2020-12-02')
@@ -434,11 +449,15 @@ for date_to_pred in dates_to_pred:
     MA_WINDOWS = [3,7,15]#[2,7,14]
         
     #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
-    for country,country_of_state,population in regions.values:
-        print(date_to_pred,country)
+    for country,country_of_state,population,vacc_perc in regions.values:
+        print(date_to_pred,country,"_",vacc_perc)
         actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
         actual = actual_all#[0:i]
-        bounds = Bounds([0, np.max(actual),0], [2, 100*np.max(actual),500])#np.max(actual)/max_infected
+        if vacc_perc > 1:
+            vacc_perc = 0.1
+            
+        suscepible_pop = population - (np.max(actual) + vacc_perc*population)
+        bounds = Bounds([0, np.max(actual),0], [2, suscepible_pop,1000])#np.max(actual)/max_infected
             
         PREDICTIONS = []
         best_score = np.inf
@@ -452,7 +471,7 @@ for date_to_pred in dates_to_pred:
                     WINDOW = win
                     #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
                     actual = savgol_filter(actual_all, ma_win, 2)
-                    res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],method="Nelder-Mead")#,method='Nelder-Mead')
+                    res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
                     alpha,lamda,beta = res.x
                     current_score = cost_actual([alpha,lamda,beta])
                     #print(ma_win,win,fg,alpha,lamda,beta,current_score)
@@ -483,6 +502,16 @@ for date_to_pred in dates_to_pred:
         #predictions["upper_conf_95"] = pred_up
         #predictions["lower_conf_95"] = pred_lower
         predicted_cases_countries = pd.concat((predicted_cases_countries,predictions),axis=0)
+
+        p = predictions
+        a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}'".format(country_of_state))
+        fig = plt.figure(figsize=[10,5])
+        plt.title("Cases {},{}".format(country,date_to_pred.strftime("%Y-%m-%d")))
+        plt.plot(pd.to_datetime(p["date"]),p["pred_confirmed_cases"].diff())
+        plt.plot(a["date"],a["confirmed"].diff())
+        pp.savefig(fig)
+        #plt.show()
+        plt.close()
 
     end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
     
@@ -586,7 +615,7 @@ for date_to_pred in dates_to_pred:
         cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
         mortality_rate = actual_all[-1]/cases[-1]
         pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
-        bounds = Bounds([0, actual_all[-1],0], [2, mortality_rate*pred_cases[-1],500])#np.max(actual)/max_infected
+        bounds = Bounds([0, actual_all[-1],0], [2, mortality_rate*pred_cases[-1],1000])#np.max(actual)/max_infected
         
             
         PREDICTIONS_DEATHS = []
@@ -651,6 +680,17 @@ for date_to_pred in dates_to_pred:
         #predictions_deaths["lower_conf_95"] = pred_lower
         predicted_deaths_countries = pd.concat((predicted_deaths_countries,predictions_deaths),axis=0)
 
+        p = predictions_deaths
+        a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}'".format(country_of_state))
+        
+        fig = plt.figure(figsize=[10,5])
+        plt.title("Deaths {},{}".format(country,date_to_pred.strftime("%Y-%m-%d")))
+        plt.plot(pd.to_datetime(p["date"]),p["pred_deaths"].diff())
+        plt.plot(a["date"],a["deaths"].diff())
+        pp.savefig(fig)
+        plt.close()
+        #plt.show()
+
     end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
     
     PRED_DEATHS_COUNTRIES = pd.concat((PRED_DEATHS_COUNTRIES,predicted_deaths_countries),axis=0)
@@ -659,6 +699,8 @@ for date_to_pred in dates_to_pred:
     copy_to_sql(df=predicted_deaths_countries,table_name="LG_predicted_deaths",schema_name="rto",if_exists="append",primary_index="Country/Region")
 
 remove_context()
+
+pp.close()
 
 
 PRED_DEATHS_COUNTRIES["date"] = pd.to_datetime(PRED_DEATHS_COUNTRIES["date"])
@@ -1068,8 +1110,8 @@ for date_to_calc in dates_to_calc:
             region_data_hist = REGIONS_CURRENT[REGIONS_CURRENT["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"' and date == '"+date_to_calc.date().strftime("%Y-%m-%d")+"'")
             
             error_total_cases = float(region_data_hist["total_cases"].values[-1]) - float(region_data["confirmed"].values[-1])
-            error_daily_cases = region_data_hist["daily_cases"].values[-1] - region_data["confirmed"].diff().values[-WINDOW:].mean() 
-            error_daily_deaths = region_data_hist["daily_deaths"].values[-1] - region_data["deaths"].diff().values[-WINDOW:].mean()
+            error_daily_cases = region_data_hist["daily_cases"].values[-1] - region_data["confirmed"].diff().values[-1]#[-WINDOW:].mean() 
+            error_daily_deaths = region_data_hist["daily_deaths"].values[-1] - region_data["deaths"].diff().values[-1]#[-WINDOW:].mean()
             error_growth_rates = region_data_hist["growth_rate"].values[-1] - growth_rate_c 
             error_growth_rates_deaths = region_data_hist["growth_rate_deaths"].values[-1] - growth_rate_d
             error_Re = region_data_hist["Re"].values[-1] - ( 1 + growth_rate_c*5 )
@@ -1100,15 +1142,16 @@ for date_to_calc in dates_to_calc:
         #if is_pred == "Actual":
         
         
-        daily_cases.append(region_data["confirmed"].diff().values[-WINDOW:].mean())
-        daily_deaths.append(region_data["deaths"].diff().values[-WINDOW:].mean())
+        daily_cases.append(region_data["confirmed"].diff().values[-1])#[-WINDOW:].mean())
+        daily_deaths.append(region_data["deaths"].diff().values[-1])#[-WINDOW:].mean())
         #if is_pred == 'Predicted':
         #daily_cases.append(region_data["confirmed"].diff().values[-1])
         #daily_deaths.append(region_data["deaths"].diff().values[-1])
     
-    power_error_factor = power_error_factor + 1
-    C = error_forget_factor**power_error_factor # error percentage adjustment
     
+    C = error_forget_factor**power_error_factor # error percentage adjustment
+    power_error_factor = power_error_factor + 1
+
     growth_rates = np.array(growth_rates) + C*np.array(errors_growth_rates)
     growth_rates_deaths = np.array(growth_rates_deaths) + C*np.array(errors_growth_rates_deaths)
     growth_rates[growth_rates<-0.5] = -0.5 # clip the negative value
@@ -1165,7 +1208,7 @@ Re,
 -LN((cast(2.0 as float)/(0.99+1.0))-1)/(20.0) as alpha_cases_sql
 ,(2.0 / (1 + EXP(-alpha_cases_sql*(daily_cases_per_M/10)))) - 1.0 as risk_factor_cases_sql
 
-,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(0.4) as alpha_deaths_sql
+,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(1.0) as alpha_deaths_sql
 ,(2.0 / (1 + EXP(-alpha_deaths_sql*(daily_deaths_per_M/10)))) - 1.0 as risk_factor_deaths_sql
 
 ,-LN((cast(1.0 as float)/(0.99))-1)/(0.2) as alpha_growth_rate_sql
