@@ -44,6 +44,8 @@ import sys
 import os
 from teradataml import create_context,remove_context,copy_to_sql,DataFrame
 from scipy.signal import savgol_filter
+from sklearn.metrics import mean_absolute_error
+import copy
 
 # Initialize logging
 logger = logging.getLogger()
@@ -172,6 +174,15 @@ select main_data.*,vacc_data.pred_vacc_perc as vacc_perc from
         on a.county1 = b.county and state_province = state
     ) a
     on admin2=county and province_state=state
+
+    union all
+
+    select "date",province_state, country_region as country_of_state,confirmed, deaths, popTotal as population
+    from (select * from rto.stg_daily_global_province 
+    where country_region in ('Australia','Japan') and province_state in (select state_province from rto.td_sites) ) m
+    inner join rto.population_global
+    on province_state = location
+
 ) main_data
 
 left join (
@@ -207,7 +218,7 @@ ROLLING_MEAN_FOR_GROWTH_CALC = 1
 print("Calculating Risk")
 conection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
 cur = connection.cursor()
-cur.execute("""select cast(max("date") as date)+1 from rto.regional_intensity_profiling""")
+cur.execute("""select cast(max("date") as date)+1 from rto.regional_intensity_profiling where "Country/Region"='Zimbabwe'""")
 max_date_region_int_tab = cur.fetchall()[0][0]
 if type(max_date_region_int_tab) == datetime.date:
     max_date_region_int_tab = max_date_region_int_tab.strftime("%Y-%m-%d")
@@ -226,6 +237,8 @@ else:
     --select max("date") as max_date from rto.daily_india
     union all 
     select max("date") as max_date from rto.daily_india_districts
+    union all
+    select max("date") as max_date from rto.stg_daily_global_province
     )as tmp;""")
     max_date_cases_tab = cur.fetchall()[0][0]
 if type(max_date_cases_tab) == datetime.date:
@@ -245,6 +258,13 @@ if max_date_cases_tab>=max_date_region_int_tab:
            'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
            'total_cases_per_M', 'daily_cases', 'daily_cases_per_M', 'daily_deaths',
            'daily_deaths_per_M'])
+
+
+    # to remove any partially calculated values
+    conection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
+    sql_command = """delete from rto.regional_intensity_profiling where "date"='{}';""".format(dates_to_calc[0].date().strftime("%Y-%m-%d"))
+    cur.close()
+
     for date_to_calc in dates_to_calc:
         total_cases = []
         daily_cases = []
@@ -317,8 +337,9 @@ if max_date_cases_tab>=max_date_region_int_tab:
     copy_to_sql(df=REGIONS,table_name="regional_intensity_profiling",schema_name="rto",if_exists="append",primary_index="Country/Region")
     remove_context()
 else:
-    print("Script already executed till the latest date")
-    sys.exit()
+    #print("Script already executed till the latest date")
+    #sys.exit()
+    print("rto.regional_intensity_profiling already updated")
 #REGIONS_CURRENT = REGIONS
 
 ##################################################################################################################################
@@ -345,6 +366,7 @@ def cost_predictions(params):
     actual2[actual2<0]=0
     #actual = np.diff(actual)
     f = [forget_factor**i for i in range(len(actual2))][::-1]
+    # [... 0.99^3 0.99^2 0.99]
     
     return np.sum(f[-WINDOW:]*(y[-WINDOW:] - actual2[-WINDOW:])**2)
 
@@ -367,7 +389,13 @@ def cost_actual(params):
     #if is_growing == True and last_actual_val > max_pred_val and last_actual_val > 100:
     #    return 100000000000000
         
-    return np.sum((y[len(actual)-win_actual:len(actual)] - actual2[-win_actual:])**2)
+
+    #return np.sum((y[len(actual)-win_actual:len(actual)] - actual2[-win_actual:])**2)
+    den = float(np.average(actual2[-win_actual:]))
+    #print(y[len(actual)-win_actual:len(actual)])
+    if den == 0:
+        return 0
+    return mean_absolute_error(y[len(actual)-win_actual:len(actual)],actual2[-win_actual:]) / den
 
 dates = pd.date_range(start='2020-01-22', end = '2023-06-01')
 def get_end_date(p_data):
@@ -400,6 +428,30 @@ def conf_interval(d,z_t="t"):
 
 ############################################################# Case predictions: ####################################################
 
+def get_dates_to_pred(table_name):
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+
+    max_date_previous=DataFrame.from_query("""select max(date_of_calc) as max_date_previous from rto.{} where "Country/Region" = 'Zimbabwe'""".format(table_name)).to_pandas()
+    max_date_previous=max_date_previous["max_date_previous"].values[0]
+    print("max_date_previous",max_date_previous,type(max_date_previous))
+    if type(max_date_previous) == str:
+        max_date_previous = datetime.datetime.strptime(max_date_previous,"%Y-%m-%d")
+
+
+    remove_context()
+
+    dates_to_pred= pd.date_range(start=(max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"), 
+                                 end = MAX_DATE_CASES.strftime("%Y-%m-%d"))#str(np.datetime_as_string(MAX_DATE_CASES,unit='D'))
+    return dates_to_pred,max_date_previous
+
+def delete_partial_update(table_name,max_date_previous):
+    conection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
+    cur = connection.cursor()
+    sql_command = """delete from rto.{} where date_of_calc ='{}';""".format(table_name,(max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
+    print(sql_command)
+    cur.execute(sql_command)
+    cur.close()
+
 from matplotlib.backends.backend_pdf import PdfPages  
 pp = PdfPages('predictions_{}.pdf'.format(str(max_date_cases_tab)))
 
@@ -408,14 +460,11 @@ print("Calculating Predictions")
 
 window_for_averaging = 15#14
 
-create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
-
-max_date_previous=DataFrame.from_query("select max(date_of_calc) as max_date_previous from rto.LG_predicted_cases").to_pandas()
-max_date_previous=max_date_previous["max_date_previous"].values[0]
 
 if len(sys.argv) == 2:
     MAX_DATE_CASES = datetime.datetime.strptime(sys.argv[1],"%Y-%m-%d").date()
 else:
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
     MAX_DATE_CASES = DataFrame.from_query("""
     select min(max_date) as min_max_date from
     (
@@ -426,12 +475,12 @@ else:
     --select max("date") as max_date from rto.daily_india
     union all 
     select max("date") as max_date from rto.daily_india_districts
+    union all
+    select max("date") as max_date from rto.stg_daily_global_province
     )as tmp;""").to_pandas().iloc[0,0]
+    remove_context()
 
-
-dates_to_pred= pd.date_range(start=(max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"), 
-                             end = MAX_DATE_CASES.strftime("%Y-%m-%d"))#str(np.datetime_as_string(MAX_DATE_CASES,unit='D'))
-dates_to_pred
+dates_to_pred,max_date_previous = get_dates_to_pred("LG_predicted_cases")
 
 END_DATES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
 PRED_CASES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
@@ -440,92 +489,116 @@ regions = df_cases[["Country/Region","country_of_state","population","vacc_perc"
 
 #create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
 #dates_to_pred= pd.date_range(start='2020-10-17', end = '2020-12-02')
+
+#sql_command = """delete from rto.LG_predicted_cases where date_of_calc ='{}';""".format((max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
+#print(sql_command)
+
 print(dates_to_pred)
-for date_to_pred in dates_to_pred:
-    max_date_cases = date_to_pred.strftime("%Y-%m-%d")
-    #max_date_cases = df_cases["date"].values[-1]
-    #print(max_date_cases)
-    end_dates_countries = []
-    predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
-    WINDOWS = [60]#np.arange(30,60)
-    FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]#0.999,
-    MA_WINDOWS = [3,7,15]#[2,7,14]
-        
-    #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
-    for country,country_of_state,population,vacc_perc in regions.values:
-        #sprint(date_to_pred,country,"_",vacc_perc)
-        actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
-        actual = actual_all#[0:i]
-        if vacc_perc > 1:
-            vacc_perc = 0.1
+if len(dates_to_pred) > 0:
+    # to remove any partial values
+    delete_partial_update("LG_predicted_cases",max_date_previous)
+
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    model_params = []
+    for date_to_pred in dates_to_pred:
+        max_date_cases = date_to_pred.strftime("%Y-%m-%d")
+        #max_date_cases = df_cases["date"].values[-1]
+        #print(max_date_cases)
+        end_dates_countries = []
+        predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
+        WINDOWS = [60]#np.arange(30,60)
+        FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]#0.999,
+        MA_WINDOWS = [3,5]#[3,7,15]#[2,7,14]
             
-        suscepible_pop = population - (np.max(actual) + vacc_perc*population)
-        bounds = Bounds([0, np.max(actual),0], [0.1, suscepible_pop,1000])#np.max(actual)/max_infected
+        #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
+        #regions = regions[regions["Country/Region"]  == 'Pune']
+        for country,country_of_state,population,vacc_perc in regions.values:
+            #sprint(date_to_pred,country,"_",vacc_perc)
+            actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
+            actual = copy.copy(actual_all)#[0:i]
+            if vacc_perc > 1:
+                vacc_perc = 0.1
+                
+            suscepible_pop = population - (np.max(actual) + vacc_perc*population)
+            bounds = Bounds([0, np.max(actual),0],[0.1, suscepible_pop,1000])#np.max(actual)/max_infected
+
+                
+            PREDICTIONS = []
+            best_score = np.inf
+            alpha_best,lamda_best,beta_best=0.02,0,0
+            win_best,fg_best =0,0
             
-        PREDICTIONS = []
-        best_score = np.inf
-        alpha_best,lamda_best,beta_best=0.02,0,0
-        win_best,fg_best =0,0
-        for ma_win in MA_WINDOWS:
-            for fg in FORGET_FACTORS:
-                forget_factor = fg
+            for ma_win in MA_WINDOWS:
+                for fg in FORGET_FACTORS:
+                    forget_factor = fg
 
-                for win in WINDOWS:
-                    WINDOW = win
-                    #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
-                    actual = savgol_filter(actual_all, ma_win, 2)
-                    res = optimize.minimize(fun=cost_predictions,x0=[0.05,np.max(actual),200],bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
-                    alpha,lamda,beta = res.x
-                    current_score = cost_actual([alpha,lamda,beta])
-                    #print(ma_win,win,fg,alpha,lamda,beta,current_score)
-                    if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
-                        best_score = current_score
-                        alpha_best,lamda_best,beta_best = alpha,lamda,beta
-                        win_best,fg_best = win,fg
+                    for win in WINDOWS:
+                        WINDOW = win
+                        #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                        actual = savgol_filter(actual_all, ma_win, 2)
+                        x0 = [0.05,np.max(actual),200]
+                        #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
+                        res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
+                        alpha,lamda,beta = res.x
+                        current_score = cost_actual([alpha,lamda,beta])
+                        print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                        if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
+                            best_score = current_score
+                            alpha_best,lamda_best,beta_best = alpha,lamda,beta
+                            win_best,fg_best = win,fg
+            
+            print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,"best_score=",best_score)
+            model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,best_score])
+            end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
+            end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
+            predictions = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best)
+            PREDICTIONS.append(predictions)
+
+            PREDICTIONS = np.array(PREDICTIONS)
+            pred_mean,pred_up,pred_lower = conf_interval(PREDICTIONS)
+            
+            # Error correction for total cases
+            error_total_cases = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["confirmed"].tail(1).values[0] - pred_mean[window_for_averaging]
+            pred_mean = pred_mean + error_total_cases
+            
+            predictions = pd.DataFrame(pred_mean,columns=["pred_confirmed_cases"])
+            predictions["Country/Region"] = country
+            predictions["country_of_state"] = country_of_state
+            predictions["date_of_calc"] = max_date_cases
+            predictions["date"] = (pd.date_range(start=(datetime.datetime.strptime(max_date_cases,"%Y-%m-%d")-datetime.timedelta(days=window_for_averaging)).strftime("%Y-%m-%d"), periods = len(predictions))).strftime("%Y-%m-%d")
+            #predictions["date"] = dates[len(actual)-window_for_averaging:len(actual)+365].strftime("%Y-%m-%d")
+            #predictions["upper_conf_95"] = pred_up
+            #predictions["lower_conf_95"] = pred_lower
+            predicted_cases_countries = pd.concat((predicted_cases_countries,predictions),axis=0)
+
+            p = predictions
+            a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}'".format(country_of_state))
+            fig = plt.figure(figsize=[10,5])
+            param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
+            plt.title("Cases {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
+            plt.plot(pd.to_datetime(p["date"]),p["pred_confirmed_cases"].diff())
+            plt.plot(a["date"],a["confirmed"].diff())
+            pp.savefig(fig)
+            #plt.show()
+            plt.close()
+
+        end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
         
-        print(date_to_pred,country,"best",win_best,fg_best,alpha_best,lamda_best,beta_best,"best_score=",best_score)
-        end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
-        end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
-        predictions = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best)
-        PREDICTIONS.append(predictions)
-
-        PREDICTIONS = np.array(PREDICTIONS)
-        pred_mean,pred_up,pred_lower = conf_interval(PREDICTIONS)
+        PRED_CASES_COUNTRIES = pd.concat((PRED_CASES_COUNTRIES,predicted_cases_countries),axis=0)
+        END_DATES_COUNTRIES = pd.concat((END_DATES_COUNTRIES,end_dates_countries),axis=0)
         
-        # Error correction for total cases
-        error_total_cases = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["confirmed"].tail(1).values[0] - pred_mean[window_for_averaging]
-        pred_mean = pred_mean + error_total_cases
         
-        predictions = pd.DataFrame(pred_mean,columns=["pred_confirmed_cases"])
-        predictions["Country/Region"] = country
-        predictions["country_of_state"] = country_of_state
-        predictions["date_of_calc"] = max_date_cases
-        predictions["date"] = (pd.date_range(start=(datetime.datetime.strptime(max_date_cases,"%Y-%m-%d")-datetime.timedelta(days=window_for_averaging)).strftime("%Y-%m-%d"), periods = len(predictions))).strftime("%Y-%m-%d")
-        #predictions["date"] = dates[len(actual)-window_for_averaging:len(actual)+365].strftime("%Y-%m-%d")
-        #predictions["upper_conf_95"] = pred_up
-        #predictions["lower_conf_95"] = pred_lower
-        predicted_cases_countries = pd.concat((predicted_cases_countries,predictions),axis=0)
+        #copy_to_sql(df=end_date_all,table_name="LG_predicted_end_dates",schema_name="rto",if_exists="append",primary_index="Country/Region")
+        
+        copy_to_sql(df=predicted_cases_countries,table_name="LG_predicted_cases",schema_name="rto",if_exists="append",primary_index="Country/Region")
+else:
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    PRED_CASES_COUNTRIES = DataFrame.from_query("""select * from rto.LG_predicted_cases where date_of_calc = (select max(date_of_calc) from rto.LG_predicted_cases);""").to_pandas()
+    print("rto.LG_predicted_cases already updated")
 
-        p = predictions
-        a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}'".format(country_of_state))
-        fig = plt.figure(figsize=[10,5])
-        param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
-        plt.title("Cases {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
-        plt.plot(pd.to_datetime(p["date"]),p["pred_confirmed_cases"].diff())
-        plt.plot(a["date"],a["confirmed"].diff())
-        pp.savefig(fig)
-        #plt.show()
-        plt.close()
-
-    end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
-    
-    PRED_CASES_COUNTRIES = pd.concat((PRED_CASES_COUNTRIES,predicted_cases_countries),axis=0)
-    END_DATES_COUNTRIES = pd.concat((END_DATES_COUNTRIES,end_dates_countries),axis=0)
-    
-    
-    #copy_to_sql(df=end_date_all,table_name="LG_predicted_end_dates",schema_name="rto",if_exists="append",primary_index="Country/Region")
-    
-    copy_to_sql(df=predicted_cases_countries,table_name="LG_predicted_cases",schema_name="rto",if_exists="append",primary_index="Country/Region")
+if len(model_params) > 0:
+    model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","best_score_wape"])
+    copy_to_sql(df=model_params,table_name="LG_predicted_cases_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
 
 remove_context()
 
@@ -589,119 +662,141 @@ print("Calculating Predictions (DEATHS)")
 
 window_for_averaging = 15#14
 
-create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
-
 PRED_DEATHS_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
 
 regions = df_cases[["Country/Region","country_of_state","population"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
 
 #create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
 
+dates_to_pred,max_date_previous = get_dates_to_pred("LG_predicted_deaths")
+
+print(dates_to_pred)
+
+
+
+
 #dates_to_pred= pd.date_range(start='2020-10-17', end = '2020-11-29')
-for date_to_pred in dates_to_pred:
-    max_date_cases = date_to_pred.strftime("%Y-%m-%d")
-    #max_date_cases = df_cases["date"].values[-1]
-    print(max_date_cases)
-    end_dates_countries = []
-    predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
-    WINDOWS = [60]#np.arange(30,60)
-    FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
-    MA_WINDOWS = [3,7,15]#[2,7,14]
-        
-    #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
-    for country,country_of_state,population in regions.values:
-        #print(date_to_pred,country)
-        actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].values
-        #actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].rolling(window=14).mean().values)
-        actual = actual_all#[0:i]
-
-        # for setting the max bound for deaths based on case predictions
-        cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
-        mortality_rate = actual_all[-1]/cases[-1]
-        pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
-        bounds = Bounds([0, actual_all[-1],0], [0.1, mortality_rate*pred_cases[-1],1000])#np.max(actual)/max_infected
-        
+if len(dates_to_pred)>0:
+    # to remove any partial values
+    delete_partial_update("LG_predicted_deaths",max_date_previous)
+    model_params = []
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    for date_to_pred in dates_to_pred:
+        max_date_cases = date_to_pred.strftime("%Y-%m-%d")
+        #max_date_cases = df_cases["date"].values[-1]
+        print(max_date_cases)
+        end_dates_countries = []
+        predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
+        WINDOWS = [60]#np.arange(30,60)
+        FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
+        MA_WINDOWS = [3,5]#7,15]#[2,7,14]
             
-        PREDICTIONS_DEATHS = []
-        best_score = np.inf
-        alpha_best,lamda_best,beta_best=0.02,0,0
-        win_best,fg_best =0,0
-        for ma_win in MA_WINDOWS:
-            for fg in FORGET_FACTORS:
-                forget_factor = fg
+        #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
+        for country,country_of_state,population in regions.values:
+            #print(date_to_pred,country)
+            actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].values
+            #actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].rolling(window=14).mean().values)
+            actual = copy.copy(actual_all)
 
-                for win in WINDOWS:
-                    WINDOW = win
-                    #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
-                    actual = savgol_filter(actual_all, ma_win, 2)
-                    res = optimize.minimize(fun=cost_predictions,x0=[0.05,actual_all[-1],200],bounds=bounds,method="L-BFGS-B")
-                    alpha,lamda,beta = res.x
-                    current_score = cost_actual([alpha,lamda,beta])
-                    #print(ma_win,win,fg,alpha,lamda,beta,current_score)
-                    if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
-                        best_score = current_score
-                        alpha_best,lamda_best,beta_best = alpha,lamda,beta
-                        win_best,fg_best = win,fg
-                    
-        print(date_to_pred,country,"best",win_best,fg_best,alpha_best,lamda_best,beta_best,"best_score=",best_score)       
-        end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
-        end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
-        predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best)
-        PREDICTIONS_DEATHS.append(predictions_deaths)
+            # for setting the max bound for deaths based on case predictions
+            cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
+            mortality_rate = actual_all[-1]/cases[-1]
+            pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
+            bounds = Bounds([0, actual_all[-1],0], [0.1, mortality_rate*pred_cases[-1],1000])#np.max(actual)/max_infected
+            
                 
-        PREDICTIONS_DEATHS = np.array(PREDICTIONS_DEATHS)
-        pred_mean,pred_up,pred_lower = conf_interval(PREDICTIONS_DEATHS)
-        
-        # Error correction in total deaths
-        error_total_deaths = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["deaths"].tail(1).values[0] - pred_mean[window_for_averaging]
-        pred_mean = pred_mean + error_total_deaths
+            PREDICTIONS_DEATHS = []
+            best_score = np.inf
+            alpha_best,lamda_best,beta_best=0.02,0,0
+            win_best,fg_best =0,0
+            
+            for ma_win in MA_WINDOWS:
+                for fg in FORGET_FACTORS:
+                    forget_factor = fg
 
-        '''
-        # for death prediction correction
-        cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
-        mortality_rate = actual_all[-1]/cases[-1]
-        #print(mortality_rate,"mor")
-        #print(len(pred_mean),len(correcion_factor_deaths))
-        pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
-        correcion_factor_deaths = 0.5
-        corrected_deaths = correcion_factor_deaths*pred_mean + (1-correcion_factor_deaths)*pred_cases*mortality_rate
-        
-        _start_total_death_pred = pred_mean[0]
-        corrected_deaths = np.diff(corrected_deaths)
-        corrected_deaths[corrected_deaths<0] = 0
+                    for win in WINDOWS:
+                        WINDOW = win
+                        #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                        actual = savgol_filter(actual_all, ma_win, 2)
+                        x0 = [0.05,actual_all[-1],200]
+                        #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
+                        res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")
+                        alpha,lamda,beta = res.x
+                        current_score = cost_actual([alpha,lamda,beta])
+                        print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                        if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
+                            best_score = current_score
+                            alpha_best,lamda_best,beta_best = alpha,lamda,beta
+                            win_best,fg_best = win,fg
+                        
+            print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,"best_score=",best_score) 
+            model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,best_score])
 
-        corrected_deaths = [pred_mean[0]] + list(corrected_deaths)
-        corrected_deaths = np.cumsum(corrected_deaths)'''
+            end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
+            end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
+            predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best)
+            PREDICTIONS_DEATHS.append(predictions_deaths)
+                    
+            PREDICTIONS_DEATHS = np.array(PREDICTIONS_DEATHS)
+            pred_mean,pred_up,pred_lower = conf_interval(PREDICTIONS_DEATHS)
+            
+            # Error correction in total deaths
+            error_total_deaths = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["deaths"].tail(1).values[0] - pred_mean[window_for_averaging]
+            pred_mean = pred_mean + error_total_deaths
 
-        
-        predictions_deaths = pd.DataFrame(pred_mean,columns=["pred_deaths"])
-        predictions_deaths["Country/Region"] = country
-        predictions_deaths["country_of_state"] = country_of_state
-        predictions_deaths["date_of_calc"] = max_date_cases
-        predictions_deaths["date"] = (pd.date_range(start=(datetime.datetime.strptime(max_date_cases,"%Y-%m-%d")-datetime.timedelta(days=window_for_averaging)).strftime("%Y-%m-%d"), periods = len(predictions_deaths))).strftime("%Y-%m-%d")
-        #predictions_deaths["date"] = dates[len(actual)-window_for_averaging:len(actual)+365].strftime("%Y-%m-%d")
-        #predictions_deaths["upper_conf_95"] = pred_up
-        #predictions_deaths["lower_conf_95"] = pred_lower
-        predicted_deaths_countries = pd.concat((predicted_deaths_countries,predictions_deaths),axis=0)
+            '''
+            # for death prediction correction
+            cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
+            mortality_rate = actual_all[-1]/cases[-1]
+            #print(mortality_rate,"mor")
+            #print(len(pred_mean),len(correcion_factor_deaths))
+            pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
+            correcion_factor_deaths = 0.5
+            corrected_deaths = correcion_factor_deaths*pred_mean + (1-correcion_factor_deaths)*pred_cases*mortality_rate
+            
+            _start_total_death_pred = pred_mean[0]
+            corrected_deaths = np.diff(corrected_deaths)
+            corrected_deaths[corrected_deaths<0] = 0
 
-        p = predictions_deaths
-        a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}'".format(country_of_state))
-        
-        fig = plt.figure(figsize=[10,5])
-        param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
-        plt.title("Deaths {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
-        plt.plot(pd.to_datetime(p["date"]),p["pred_deaths"].diff())
-        plt.plot(a["date"],a["deaths"].diff())
-        pp.savefig(fig)
-        plt.close()
-        #plt.show()
+            corrected_deaths = [pred_mean[0]] + list(corrected_deaths)
+            corrected_deaths = np.cumsum(corrected_deaths)'''
 
-    end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
-    
-    PRED_DEATHS_COUNTRIES = pd.concat((PRED_DEATHS_COUNTRIES,predicted_deaths_countries),axis=0)
+            
+            predictions_deaths = pd.DataFrame(pred_mean,columns=["pred_deaths"])
+            predictions_deaths["Country/Region"] = country
+            predictions_deaths["country_of_state"] = country_of_state
+            predictions_deaths["date_of_calc"] = max_date_cases
+            predictions_deaths["date"] = (pd.date_range(start=(datetime.datetime.strptime(max_date_cases,"%Y-%m-%d")-datetime.timedelta(days=window_for_averaging)).strftime("%Y-%m-%d"), periods = len(predictions_deaths))).strftime("%Y-%m-%d")
+            #predictions_deaths["date"] = dates[len(actual)-window_for_averaging:len(actual)+365].strftime("%Y-%m-%d")
+            #predictions_deaths["upper_conf_95"] = pred_up
+            #predictions_deaths["lower_conf_95"] = pred_lower
+            predicted_deaths_countries = pd.concat((predicted_deaths_countries,predictions_deaths),axis=0)
+
+            p = predictions_deaths
+            a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}'".format(country_of_state))
+            
+            fig = plt.figure(figsize=[10,5])
+            param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
+            plt.title("Deaths {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
+            plt.plot(pd.to_datetime(p["date"]),p["pred_deaths"].diff())
+            plt.plot(a["date"],a["deaths"].diff())
+            pp.savefig(fig)
+            plt.close()
+            #plt.show()
+
+        end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
         
-    
-    copy_to_sql(df=predicted_deaths_countries,table_name="LG_predicted_deaths",schema_name="rto",if_exists="append",primary_index="Country/Region")
+        PRED_DEATHS_COUNTRIES = pd.concat((PRED_DEATHS_COUNTRIES,predicted_deaths_countries),axis=0)
+            
+        
+        copy_to_sql(df=predicted_deaths_countries,table_name="LG_predicted_deaths",schema_name="rto",if_exists="append",primary_index="Country/Region")
+else:
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    print("rto.LG_predicted_deaths already updated")
+
+if len(model_params) > 0:
+    model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","best_score_wape"])
+    copy_to_sql(df=model_params,table_name="LG_predicted_deaths_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
 
 remove_context()
 
@@ -711,6 +806,7 @@ pp.close()
 PRED_DEATHS_COUNTRIES["date"] = pd.to_datetime(PRED_DEATHS_COUNTRIES["date"])
 PRED_DEATHS_COUNTRIES["date_of_calc"] = pd.to_datetime(PRED_DEATHS_COUNTRIES["date_of_calc"])
 PRED_DEATHS_COUNTRIES
+
 
 
 
@@ -742,7 +838,7 @@ select aaa.*,ddd.country_of_state,ddd."date",ddd.pred_confirmed_cases as confirm
     
     select distinct country_region as "Country/Region",pop_country as population from rto.country_population aa
     inner join
-    (select * from rto.td_sites where country_region<>'US' and country_region <>'India') bb
+    (select * from rto.td_sites where country_region<>'US' and country_region <>'India' and country_region <> 'Australia' and country_region <> 'Japan') bb
     on aa.country = bb.country_region
     
     union all 
@@ -760,19 +856,27 @@ select aaa.*,ddd.country_of_state,ddd."date",ddd.pred_confirmed_cases as confirm
     (select * from rto.td_sites where country_region ='India') bb
     on aa.state = bb.state_province
     where district <>  'Hyderabad'
+    
+    union all
+    
+    select distinct location as "Country/Region",popTotal from rto.population_global aa
+    inner join
+    (select * from rto.td_sites where country_region in ('Australia','Japan')) bb
+    on "Country/Region" = bb.state_province
+    
 
 ) aaa
 
 inner join
 (
 select bbb."Country/Region",bbb.country_of_state,bbb."date",bbb.pred_confirmed_cases,ccc.pred_deaths from 
-(select * from rto.LG_predicted_cases where country_of_state in ('','US_county','India','India_district') and date_of_calc = (select max(date_of_calc) from rto.LG_predicted_cases)) bbb
+(select * from rto.LG_predicted_cases where country_of_state in ('','US_county','India','India_district','Australia','Japan') and date_of_calc = (select max(date_of_calc) from rto.LG_predicted_cases)) bbb
 inner join
-(select * from rto.LG_predicted_deaths where country_of_state in ('','US_county','India','India_district') and date_of_calc = (select max(date_of_calc) from rto.LG_predicted_deaths)) ccc
+(select * from rto.LG_predicted_deaths where country_of_state in ('','US_county','India','India_district','Australia','Japan') and date_of_calc = (select max(date_of_calc) from rto.LG_predicted_deaths)) ccc
 on bbb."date" = ccc."date" and bbb."Country/Region" = ccc."Country/Region" and bbb.country_of_state = ccc.country_of_state
 ) ddd
 on aaa."Country/Region" = ddd."Country/Region"
-order by "date";
+order by "date" ;
 """
 #print(sql_command)
 cur.execute(sql_command)
