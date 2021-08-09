@@ -28,6 +28,7 @@ delete from rto.LG_predicted_deaths where date_of_calc >'2021-06-29';
 delete from rto.regional_intensity_profiling_future where date_of_calc >'2021-06-29';
 delete from rto.regional_intensity_predictions where date_of_calc >'2021-06-29';
 delete from rto.intensity_fixed_params where date_of_calc > '2021-06-29';
+delete from rto.LG_predicted_cases_params where date_of_calc > '2021-06-29';
 '''
 import logging
 import datetime
@@ -57,21 +58,41 @@ logger.addHandler(fh)
 #logger.info("starting")
 #exit()
 
+'''def delete_entries(date_of_calc):
+
+    """delete from rto.regional_intensity_profiling where "date">'{}';
+    delete from rto.LG_predicted_cases where date_of_calc >'{}';
+    delete from rto.LG_predicted_cases_with_conf where date_of_calc >'{}';
+    delete from rto.LG_predicted_deaths where date_of_calc >'{}';
+    delete from rto.regional_intensity_profiling_future where date_of_calc >'{}';
+    delete from rto.regional_intensity_predictions where date_of_calc >'{}';
+    delete from rto.intensity_fixed_params where date_of_calc > '{}';
+    delete from rto.LG_predicted_cases_params where date_of_calc > '{}';"""
+
+    connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
+    cur = connection.cursor()
+    cur.execute(sql_command)
+    res = cur.fetchall()
+    cur.close()'''
+
+
+
 def func(t, A, lamda): # y = A*exp(lambda*t)
     y = A*np.exp(lamda*t)
     return y
 ROLLING_MEAN_FOR_GROWTH_CALC = 0
 def cost_function(params):
-    y = func(np.arange(0,WINDOW,1),params[0],params[1])
-    #print("y",y,D["JHU_ConfirmedCases.data"].diff().values[-WINDOW:])
+    #WINDOW_RISK = 14
+    y = func(np.arange(0,WINDOW_RISK,1),params[0],params[1])
+    #print("y",y,D["JHU_ConfirmedCases.data"].diff().values[-WINDOW_RISK:])
     assert ROLLING_MEAN_FOR_GROWTH_CALC ==0 or ROLLING_MEAN_FOR_GROWTH_CALC ==1
 
      
     Ddiff = D.diff().fillna(value=D.diff().mean()) # in case the first value is NAN
     if ROLLING_MEAN_FOR_GROWTH_CALC ==0:
-        return np.sum((y - Ddiff.values[-WINDOW:])**2)
+        return np.sum((y - Ddiff.values[-WINDOW_RISK:])**2)
     elif ROLLING_MEAN_FOR_GROWTH_CALC ==1:
-        return np.sum((y - Ddiff.rolling(window=14).mean().values[-WINDOW:])**2)
+        return np.sum((y - Ddiff.rolling(window=14).mean().values[-WINDOW_RISK:])**2)
 def min_max_scaler_p(d):
     d = np.array(d)
     _max = np.percentile(d,95)
@@ -112,7 +133,25 @@ TD_regions = ["Argentina","Australia","Austria","Belgium","Brazil","Canada","Chi
 "Wake",
 "Fulton"]
 
+TD_regions =    ["Argentina","Australian Capital Territory",
+                  "Austria","Bengaluru Urban","Brazil","China","Cook","Czech Republic",
+                  "Dallas","Denmark","Egypt","Finland","France","Fukuoka","Fulton","Germany",
+                  "Gurugram","Indonesia","Ireland","Italy","King","Lexington","Los Angeles","Malaysia",
+                  "Mexico","Mumbai","Netherlands","New South Wales","New York","Osaka","Pakistan","Poland",
+                  "Pune","Russia","San Diego","Santa Clara","Saudi Arabia","Singapore","South Korea","Spain",
+                  "Sweden","Switzerland","Taiwan","Telangana","Tokyo","Travis","United Arab Emirates",
+                  "United Kingdom","Wake"]
 
+
+
+def get_sql_df(sql_command):
+    connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
+    cur = connection.cursor()
+    cur.execute(sql_command)
+    res = cur.fetchall()
+    cur.close()
+    df = pd.DataFrame(res,columns=np.array(cur.description)[:,0])
+    return df
 
 
 
@@ -126,7 +165,7 @@ connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACC
 cur = connection.cursor()
 
 cur.execute("""
-select main_data.*,vacc_data.pred_vacc_perc as vacc_perc from 
+select main_data.*,vacc_data.pred_vacc_perc as vacc_perc,mob.avg_mob from 
 (
     select "date","Country/Region",country_of_state,confirmed,deaths,pop_country as population from
     (select "date",
@@ -191,6 +230,9 @@ where date_of_calc = (select max(date_of_calc) from rto.regional_intensity_pred_
 ) vacc_data
 on main_data."Country/Region" = vacc_data."Country/Region" and main_data.country_of_state = vacc_data.country_of_state
 
+left join rto.mobility_avg_view mob
+on main_data."Country/Region" = mob."Country/Region"
+
 order by 1;
 """)
 res = cur.fetchall()
@@ -249,6 +291,8 @@ cur.close()
 #max_date_region_int_tab = '2020-10-18' # CHANGE THIS OR COMMENT IT IF NEEDED TO RECALCULATE
 #max_date_cases_tab = '2021-02-27' # CHANGE THIS OR COMMENT IT IF NEEDED TO RECALCULATE
 
+WINDOW_RISK = 14
+
 print(max_date_region_int_tab,max_date_cases_tab)
 if max_date_cases_tab>=max_date_region_int_tab:
     dates_to_calc= pd.date_range(start=max_date_region_int_tab, end = max_date_cases_tab)
@@ -271,7 +315,7 @@ if max_date_cases_tab>=max_date_region_int_tab:
         daily_deaths = []
         growth_rates = []
         growth_rates_deaths = []
-        WINDOW = 14
+        
         A = 1000
         lamda = 0.001
 
@@ -285,7 +329,7 @@ if max_date_cases_tab>=max_date_region_int_tab:
         for row in regions[["Country/Region","country_of_state","population"]].values:
 
             region,country_of_state,pop = row
-            print(region,country_of_state,pop)
+            #print(region,country_of_state,pop)
             if region in TD_regions:
                 IS_TD.append(1)
             else:
@@ -299,7 +343,7 @@ if max_date_cases_tab>=max_date_region_int_tab:
             result = optimize.fmin(cost_function,initial_guess,maxfun=1000,maxiter=1000)
             A_,growth_rate = result 
             growth_rates.append(growth_rate)
-            print(region,growth_rate)
+            print(region,country_of_state,growth_rate)
 
 
             D = region_data["deaths"]#D = COUNTRY_DATA[country]["JHU_ConfirmedDeaths.data"]
@@ -309,8 +353,8 @@ if max_date_cases_tab>=max_date_region_int_tab:
             growth_rates_deaths.append(growth_rate)
 
             total_cases.append(float(region_data["confirmed"].values[-1]))
-            daily_cases.append(region_data["confirmed"].diff().values[-WINDOW:].mean())
-            daily_deaths.append(region_data["deaths"].diff().values[-WINDOW:].mean())
+            daily_cases.append(region_data["confirmed"].diff().values[-WINDOW_RISK:].mean())
+            daily_deaths.append(region_data["deaths"].diff().values[-WINDOW_RISK:].mean())
         growth_rates = np.array(growth_rates)
         growth_rates_deaths = np.array(growth_rates_deaths)
         growth_rates[growth_rates<-0.5] = -0.5 # clip the negative value
@@ -377,7 +421,7 @@ def cost_actual(params):
     y = np.diff(y)
     actual2= np.diff(actual)
     #actual = np.diff(actual)
-    win_actual = 2*window_for_averaging
+    win_actual = window_for_averaging#2*window_for_averaging
     start_pred_val = y[-win_actual] 
     max_pred_val = max(y)
     if start_pred_val < max_pred_val:
@@ -422,6 +466,35 @@ def conf_interval(d,z_t="t"):
     #return m, m+std, m-std # mean, upper_bound, lower_bound
     return m, m+z_t*(std/sq_n), m-z_t*(std/sq_n) # mean, upper_bound, lower_bound
 
+def get_growth_rate(data,A,lamda):
+    #D = region_data["confirmed"]
+    #global D
+    D = data
+    initial_guess = [A,lamda]
+    result = optimize.fmin(cost_function,initial_guess,maxfun=1000,maxiter=1000)
+    A_,growth_rate = result 
+    return growth_rate
+
+def get_unknown_immune_pop(mobility):
+    max_possible_immune_pop = 0.95
+    imm = 1- ( (max_possible_immune_pop) / (1 + np.exp(-0.1*(mobility))) )
+    return imm
+
+def get_shape_trend(data):
+    last_val = data[-1]
+    max_val = max(data[-14:])
+    min_val = min(data[-14:])
+    start_val = data[-14]
+    #print(data[-14:])
+    #print(last_val,min_val,max_val,start_val)
+    if last_val  < max_val and start_val  < max_val:
+        return "Peak just passed" # need a short window
+    elif last_val == min_val:
+        return "Decreasing trend" 
+    elif last_val == max_val:
+        return "increasing trend" # need the upper limit
+    elif last_val > min_val:
+        return "just started increasing"
 
 ###################################################################################################################################
 
@@ -448,7 +521,7 @@ def delete_partial_update(table_name,max_date_previous):
     conection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
     cur = connection.cursor()
     sql_command = """delete from rto.{} where date_of_calc ='{}';""".format(table_name,(max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
-    print(sql_command)
+    #print(sql_command)
     cur.execute(sql_command)
     cur.close()
 
@@ -480,18 +553,26 @@ else:
     )as tmp;""").to_pandas().iloc[0,0]
     remove_context()
 
+CURRENT_DAY_SINCE_START = (MAX_DATE_CASES - dates[0].date()).days
+
 dates_to_pred,max_date_previous = get_dates_to_pred("LG_predicted_cases")
 
 END_DATES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
 PRED_CASES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
 
-regions = df_cases[["Country/Region","country_of_state","population","vacc_perc"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
+regions = df_cases[["Country/Region","country_of_state","population","vacc_perc","avg_mob"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
 
 #create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
 #dates_to_pred= pd.date_range(start='2020-10-17', end = '2020-12-02')
 
 #sql_command = """delete from rto.LG_predicted_cases where date_of_calc ='{}';""".format((max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
 #print(sql_command)
+model_params = []
+max_bound_beta = CURRENT_DAY_SINCE_START + 90#1000
+max_bound_alpha = 0.1
+WINDOWS = [60]#np.arange(30,60)
+FORGET_FACTORS=[0.99,0.9,0.85,0.8]#[0.9,0.95,0.99]#0.999,
+MA_WINDOWS = [-1]#[3,7,15]#[2,7,14]
 
 print(dates_to_pred)
 if len(dates_to_pred) > 0:
@@ -499,28 +580,47 @@ if len(dates_to_pred) > 0:
     delete_partial_update("LG_predicted_cases",max_date_previous)
 
     create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
-    model_params = []
+    
+    
+
+    prev_params = get_sql_df("""select * from 
+                                (select a.*, rank() over(partition by "Country/Region",country_of_state order by best_score_wape asc)  as rank_score
+                                from rto.LG_predicted_cases_params a where date_of_calc > (select max(date_of_calc) from rto.LG_predicted_cases_params)-7) tmp
+                                where rank_score =1;""")
+
     for date_to_pred in dates_to_pred:
         max_date_cases = date_to_pred.strftime("%Y-%m-%d")
         #max_date_cases = df_cases["date"].values[-1]
         #print(max_date_cases)
         end_dates_countries = []
         predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
-        WINDOWS = [60]#np.arange(30,60)
-        FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]#0.999,
-        MA_WINDOWS = [3,5]#[3,7,15]#[2,7,14]
+        
             
         #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
         #regions = regions[regions["Country/Region"]  == 'Pune']
-        for country,country_of_state,population,vacc_perc in regions.values:
+        for country,country_of_state,population,vacc_perc,avg_mob in regions.values:
             #sprint(date_to_pred,country,"_",vacc_perc)
-            actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
+            prev_params_item = prev_params[prev_params["Country/Region"]==country].query("country_of_state == '{}'".format(country_of_state))
+
+            #actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
+            actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].rolling(window=14).mean().values)
+            #print("---------actual_all",actual_all,len(actual_all))
             actual = copy.copy(actual_all)#[0:i]
             if vacc_perc > 1:
                 vacc_perc = 0.1
-                
-            suscepible_pop = population - (np.max(actual) + vacc_perc*population)
-            bounds = Bounds([0, np.max(actual),0],[0.1, suscepible_pop,1000])#np.max(actual)/max_infected
+            
+            D=df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].rolling(window=14).mean()
+            WINDOW_RISK = 7
+            gr = get_growth_rate(D,1000,0.001)
+            #print("growth",gr)
+            if gr > 0:
+                unknown_immune_pop = get_unknown_immune_pop(avg_mob)
+            else:
+                unknown_immune_pop = 1.0
+            #print(vacc_perc,avg_mob,unknown_immune_pop)
+            suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + vacc_perc*population) )
+            #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
+            bounds = Bounds([0,0,200],[max_bound_alpha, suscepible_pop,max_bound_beta])#np.max(actual)/max_infected
 
                 
             PREDICTIONS = []
@@ -528,6 +628,10 @@ if len(dates_to_pred) > 0:
             alpha_best,lamda_best,beta_best=0.02,0,0
             win_best,fg_best =0,0
             
+            if len(prev_params_item)>0 and prev_params_item["best_score_wape"].values[0] < 1.0:
+                x0 = [ prev_params_item["alpha"].values[0], prev_params_item["lamda"].values[0], prev_params_item["beta"].values[0] ]
+            else:
+                x0 = [0.05,np.max(actual),200]
             for ma_win in MA_WINDOWS:
                 for fg in FORGET_FACTORS:
                     forget_factor = fg
@@ -535,8 +639,8 @@ if len(dates_to_pred) > 0:
                     for win in WINDOWS:
                         WINDOW = win
                         #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
-                        actual = savgol_filter(actual_all, ma_win, 2)
-                        x0 = [0.05,np.max(actual),200]
+                        #actual = savgol_filter(actual_all, ma_win, 2)
+                        #x0 = [0.05,np.max(actual),200]
                         #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
                         res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
                         alpha,lamda,beta = res.x
@@ -571,16 +675,18 @@ if len(dates_to_pred) > 0:
             #predictions["lower_conf_95"] = pred_lower
             predicted_cases_countries = pd.concat((predicted_cases_countries,predictions),axis=0)
 
-            p = predictions
-            a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}'".format(country_of_state))
-            fig = plt.figure(figsize=[10,5])
-            param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
-            plt.title("Cases {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
-            plt.plot(pd.to_datetime(p["date"]),p["pred_confirmed_cases"].diff())
-            plt.plot(a["date"],a["confirmed"].diff())
-            pp.savefig(fig)
-            #plt.show()
-            plt.close()
+            if country in TD_regions:
+                p = predictions
+                a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}' and date <= '{}'".format(country_of_state,max_date_cases))
+                #print("---------a ",a,len(a))
+                fig = plt.figure(figsize=[10,5])
+                param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
+                plt.title("Cases {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
+                plt.plot(pd.to_datetime(p["date"]),p["pred_confirmed_cases"].diff())
+                plt.plot(a["date"],[0]+list(np.diff(actual_all)))
+                pp.savefig(fig)
+                #plt.show()
+                plt.close()
 
         end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
         
@@ -592,15 +698,18 @@ if len(dates_to_pred) > 0:
         
         copy_to_sql(df=predicted_cases_countries,table_name="LG_predicted_cases",schema_name="rto",if_exists="append",primary_index="Country/Region")
 else:
-    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
-    PRED_CASES_COUNTRIES = DataFrame.from_query("""select * from rto.LG_predicted_cases where date_of_calc = (select max(date_of_calc) from rto.LG_predicted_cases);""").to_pandas()
+    #create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    PRED_CASES_COUNTRIES = get_sql_df("""select * from rto.LG_predicted_cases where date_of_calc = (select max(date_of_calc) from rto.LG_predicted_cases);""")
     print("rto.LG_predicted_cases already updated")
 
 if len(model_params) > 0:
     model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","best_score_wape"])
     copy_to_sql(df=model_params,table_name="LG_predicted_cases_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
 
-remove_context()
+try:
+    remove_context()
+except Exception as e:
+    pass
 
 
 PRED_CASES_COUNTRIES["date"] = pd.to_datetime(PRED_CASES_COUNTRIES["date"])
@@ -673,13 +782,18 @@ dates_to_pred,max_date_previous = get_dates_to_pred("LG_predicted_deaths")
 print(dates_to_pred)
 
 
-
+model_params = []
 
 #dates_to_pred= pd.date_range(start='2020-10-17', end = '2020-11-29')
 if len(dates_to_pred)>0:
+    prev_params = get_sql_df("""select * from 
+                                (select a.*, rank() over(partition by "Country/Region",country_of_state order by best_score_wape asc)  as rank_score
+                                from rto.LG_predicted_deaths_params a where date_of_calc > (select max(date_of_calc) from rto.LG_predicted_deaths_params)-7) tmp
+                                where rank_score =1;""")
+
     # to remove any partial values
     delete_partial_update("LG_predicted_deaths",max_date_previous)
-    model_params = []
+    
     create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
     for date_to_pred in dates_to_pred:
         max_date_cases = date_to_pred.strftime("%Y-%m-%d")
@@ -687,14 +801,18 @@ if len(dates_to_pred)>0:
         print(max_date_cases)
         end_dates_countries = []
         predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
-        WINDOWS = [60]#np.arange(30,60)
-        FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
-        MA_WINDOWS = [3,5]#7,15]#[2,7,14]
+        #WINDOWS = [60]#np.arange(30,60)
+        #FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
+        #MA_WINDOWS = [3,5]#7,15]#[2,7,14]
             
         #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
         for country,country_of_state,population in regions.values:
-            #print(date_to_pred,country)
-            actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].values
+            print(date_to_pred,country)
+            prev_params_item = prev_params[prev_params["Country/Region"]==country].query("country_of_state == '{}'".format(country_of_state))
+
+            #actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].values
+            actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].rolling(window=14).mean().values)
+        
             #actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].rolling(window=14).mean().values)
             actual = copy.copy(actual_all)
 
@@ -702,13 +820,18 @@ if len(dates_to_pred)>0:
             cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
             mortality_rate = actual_all[-1]/cases[-1]
             pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
-            bounds = Bounds([0, actual_all[-1],0], [0.1, mortality_rate*pred_cases[-1],1000])#np.max(actual)/max_infected
+            bounds = Bounds([0, 0,0], [max_bound_alpha, mortality_rate*pred_cases[-1] - actual_all[-1],max_bound_beta])#np.max(actual)/max_infected
             
-                
+            
             PREDICTIONS_DEATHS = []
             best_score = np.inf
             alpha_best,lamda_best,beta_best=0.02,0,0
             win_best,fg_best =0,0
+
+            if len(prev_params_item)>0 and prev_params_item["best_score_wape"].values[0] < 1.0:
+                x0 = [ prev_params_item["alpha"].values[0], prev_params_item["lamda"].values[0], prev_params_item["beta"].values[0] ]
+            else:
+                x0 = [0.05,np.max(actual),200]
             
             for ma_win in MA_WINDOWS:
                 for fg in FORGET_FACTORS:
@@ -717,8 +840,8 @@ if len(dates_to_pred)>0:
                     for win in WINDOWS:
                         WINDOW = win
                         #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
-                        actual = savgol_filter(actual_all, ma_win, 2)
-                        x0 = [0.05,actual_all[-1],200]
+                        #actual = savgol_filter(actual_all, ma_win, 2)
+                        #x0 = [0.05,actual_all[-1],200]
                         #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
                         res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")
                         alpha,lamda,beta = res.x
@@ -772,17 +895,18 @@ if len(dates_to_pred)>0:
             #predictions_deaths["lower_conf_95"] = pred_lower
             predicted_deaths_countries = pd.concat((predicted_deaths_countries,predictions_deaths),axis=0)
 
-            p = predictions_deaths
-            a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}'".format(country_of_state))
             
-            fig = plt.figure(figsize=[10,5])
-            param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
-            plt.title("Deaths {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
-            plt.plot(pd.to_datetime(p["date"]),p["pred_deaths"].diff())
-            plt.plot(a["date"],a["deaths"].diff())
-            pp.savefig(fig)
-            plt.close()
-            #plt.show()
+            if country in TD_regions:
+                p = predictions_deaths
+                a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}' and date <= '{}'".format(country_of_state,max_date_cases))
+                fig = plt.figure(figsize=[10,5])
+                param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
+                plt.title("Deaths {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
+                plt.plot(pd.to_datetime(p["date"]),p["pred_deaths"].diff())
+                plt.plot(a["date"],[0]+list(np.diff(actual_all)))
+                pp.savefig(fig)
+                plt.close()
+                #plt.show()
 
         end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
         
@@ -906,7 +1030,19 @@ dates_to_calc
 
 ############################################### calculate risk on predicted data #########################################################
 
+# to check if the table is already updated or not.
+connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
+cur = connection.cursor()
+sql_command = """select max(date_of_calc) from rto.regional_intensity_profiling_future where "Country/Region" = 'Wake'"""
+cur.execute(sql_command)
+res = cur.fetchall()
+cur.close()
+max_date_fut_tab = res[0][0]
+#
+
+
 # calculate risk on predicted data
+
 ROLLING_MEAN_FOR_GROWTH_CALC = 0
 REGIONS = pd.DataFrame([],columns=['Country/Region', 'country_of_state', 'population', 'date', 'is_TD',
        'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
@@ -918,7 +1054,7 @@ for date_to_calc in dates_to_calc:
     daily_deaths = []
     growth_rates = []
     growth_rates_deaths = []
-    WINDOW = 14
+    WINDOW_RISK = 14
     A = 1000
     lamda = 0.001
 
@@ -930,7 +1066,7 @@ for date_to_calc in dates_to_calc:
     for row in regions[["Country/Region","country_of_state","population"]].values:
 
         region,country_of_state,pop = row
-        print(region,country_of_state,pop)
+        #print(region,country_of_state,pop)
         if region in TD_regions:
             IS_TD.append(1)
         else:
@@ -955,8 +1091,8 @@ for date_to_calc in dates_to_calc:
         growth_rates_deaths.append(growth_rate)
 
         total_cases.append(float(region_data["confirmed"].values[-1]))
-        daily_cases.append(region_data["confirmed"].diff().values[-WINDOW:].mean())
-        daily_deaths.append(region_data["deaths"].diff().values[-WINDOW:].mean())
+        daily_cases.append(region_data["confirmed"].diff().values[-WINDOW_RISK:].mean())
+        daily_deaths.append(region_data["deaths"].diff().values[-WINDOW_RISK:].mean())
     growth_rates = np.array(growth_rates)
     growth_rates_deaths = np.array(growth_rates_deaths)
     growth_rates[growth_rates<-0.5] = -0.5 # clip the negative value
@@ -1107,267 +1243,363 @@ del REGIONS_MERGED["population_y"]
 del REGIONS_MERGED["date_of_calc_y"]
 REGIONS_MERGED = REGIONS_MERGED.rename(columns = {"is_TD_x":"is_TD","population_x":"population","date_of_calc_x":"date_of_calc"})
 
-create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
-copy_to_sql(df=REGIONS_MERGED,table_name="regional_intensity_profiling_future",schema_name="rto",if_exists="append",primary_index="Country/Region")
-remove_context()
-REGIONS_MERGED
+if max_date_fut_tab != min_date_for_future_risk.strftime("%Y-%m-%d"):
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    copy_to_sql(df=REGIONS_MERGED,table_name="regional_intensity_profiling_future",schema_name="rto",if_exists="append",primary_index="Country/Region")
+    remove_context()
+
+
+    logger.info("rto.regional_intensity_profiling_future done. Risk prediction for specific future dates.")
+    print("rto.regional_intensity_profiling_future updated")
+else:
+    print("rto.regional_intensity_profiling_future already updated")
 
 ###################################################################################################################################
-logger.info("rto.regional_intensity_profiling_future done. Risk prediction for specific future dates.")
+
 
 
 ################################################# risk predictions for all countries #############################################
 
+# to check if the table is already updated or not.
+connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
+cur = connection.cursor()
+sql_command = """select max(date_of_calc) from rto.regional_intensity_predictions where "Country/Region" = 'Wake'"""
+cur.execute(sql_command)
+res = cur.fetchall()
+cur.close()
+max_date_risk_pred_tab = res[0][0]
+#
+
 print("risk predictions (365 days into the future)")
 #df_cases_pred2 = df_cases[df_cases["Country/Region"].isin(df_cases_pred["Country/Region"].unique())]
 #df_cases_pred2 = pd.concat((df_cases_pred2,df_cases_pred))
-df_cases_pred2 = df_cases_pred
-dates_to_calc= pd.date_range(start=(MAX_DATE_CASES+datetime.timedelta(days=0)).strftime("%Y-%m-%d"), 
-                             end = (MAX_DATE_CASES+datetime.timedelta(days=365)).strftime("%Y-%m-%d"))#str(np.datetime_as_string(MAX_DATE_CASES,unit='D'))
-dates_to_calc
+
+if max_date_risk_pred_tab != MAX_DATE_CASES.strftime("%Y-%m-%d"):
+
+    df_cases_pred2 = df_cases_pred
+    dates_to_calc= pd.date_range(start=(MAX_DATE_CASES+datetime.timedelta(days=0)).strftime("%Y-%m-%d"), 
+                                 end = (MAX_DATE_CASES+datetime.timedelta(days=365)).strftime("%Y-%m-%d"))#str(np.datetime_as_string(MAX_DATE_CASES,unit='D'))
+    dates_to_calc
 
 
-region_data_hist = REGIONS_CURRENT[REGIONS_CURRENT["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"' and date == '"+date_to_calc.date().strftime("%Y-%m-%d")+"'")
+    region_data_hist = REGIONS_CURRENT[REGIONS_CURRENT["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"' and date == '"+date_to_calc.date().strftime("%Y-%m-%d")+"'")
 
 
-# calculate risk on predicted data 365 days into the future
-ROLLING_MEAN_FOR_GROWTH_CALC = 0
-REGIONS = pd.DataFrame([],columns=['Country/Region', 'country_of_state', 'population', 'date', 'is_TD',
-       'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
-       'total_cases_per_M', 'daily_cases', 'daily_cases_per_M', 'daily_deaths',
-       'daily_deaths_per_M'])
+    # calculate risk on predicted data 365 days into the future
+    ROLLING_MEAN_FOR_GROWTH_CALC = 0
+    REGIONS = pd.DataFrame([],columns=['Country/Region', 'country_of_state', 'population', 'date', 'is_TD',
+           'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
+           'total_cases_per_M', 'daily_cases', 'daily_cases_per_M', 'daily_deaths',
+           'daily_deaths_per_M'])
 
-error_forget_factor = 0.99
-power_error_factor = 0
-errors_total_cases = [] # errors for each country
-errors_daily_cases = []
-errors_daily_deaths = []
-errors_growth_rates = []
-errors_growth_rates_deaths = []
-errors_Re = []
+    error_forget_factor = 0.99
+    power_error_factor = 0
+    errors_total_cases = [] # errors for each country
+    errors_daily_cases = []
+    errors_daily_deaths = []
+    errors_growth_rates = []
+    errors_growth_rates_deaths = []
+    errors_Re = []
 
-error_total_cases = 0
-error_daily_cases = 0
-error_daily_deaths = 0
-error_growth_rates = 0
-error_growth_rates_deaths = 0
-error_Re = 0
+    error_total_cases = 0
+    error_daily_cases = 0
+    error_daily_deaths = 0
+    error_growth_rates = 0
+    error_growth_rates_deaths = 0
+    error_Re = 0
 
-for date_to_calc in dates_to_calc:
-    total_cases = []
-    daily_cases = []
-    daily_deaths = []
-    growth_rates = []
-    growth_rates_deaths = []
-    
-    
-    
-    
-    is_pred = []
-    WINDOW = 14
-    A = 1000
-    lamda = 0.001
-
-    regions = df_cases_pred2[["Country/Region","country_of_state","population"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
-    max_date_cases = df_cases_pred2["date"].values[-1]
-    regions["date"] = date_to_calc.date().strftime("%Y-%m-%d")#max_date_cases
-    IS_TD = []
-    print(date_to_calc)
-    if date_to_calc.date() <= MAX_DATE_CASES:
-        is_pred = "Actual" 
-    else:
-        is_pred = "Predicted"
+    day_risk = 0
+    for date_to_calc in dates_to_calc:
+        total_cases = []
+        daily_cases = []
+        daily_deaths = []
+        growth_rates = []
+        growth_rates_deaths = []
         
-    #regions = regions[(regions["Country/Region"] =='Japan') | (regions["Country/Region"] =='Pakistan') |(regions["Country/Region"]=='United Arab Emirates')]
-    for row in regions[["Country/Region","country_of_state","population"]].values:
+        
+        
+        
+        is_pred = []
+        WINDOW_RISK = 14
+        A = 1000
+        lamda = 0.001
 
-        region,country_of_state,pop = row
-        print(region,country_of_state,pop)
-        if region in TD_regions:
-            IS_TD.append(1)
+        regions = df_cases_pred2[["Country/Region","country_of_state","population"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
+        max_date_cases = df_cases_pred2["date"].values[-1]
+        regions["date"] = date_to_calc.date().strftime("%Y-%m-%d")#max_date_cases
+        IS_TD = []
+        #print(date_to_calc)
+        if date_to_calc.date() <= MAX_DATE_CASES:
+            is_pred = "Actual" 
         else:
-            IS_TD.append(0)
+            is_pred = "Predicted"
             
-        
+        #regions = regions[(regions["Country/Region"] =='Japan') | (regions["Country/Region"] =='Pakistan') |(regions["Country/Region"]=='United Arab Emirates')]
+        for row in regions[["Country/Region","country_of_state","population"]].values:
 
-        #region_data = df_cases_pred2[df_cases_pred2["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"'")
-        region_data = df_cases_pred2[df_cases_pred2["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"' and date <= '"+date_to_calc.date().strftime("%Y-%m-%d")+"'")
-        
-        
-        
-        
-        
-        D = region_data["confirmed"]
-        
-        
-        initial_guess = [A,lamda]
-        result = optimize.fmin(cost_function,initial_guess,maxfun=1000,maxiter=1000)
-        A_,growth_rate_c = result 
-        
-        print(region,growth_rate_c)
-
-
-        D = region_data["deaths"]#D = COUNTRY_DATA[country]["JHU_ConfirmedDeaths.data"]
-
-        initial_guess = [A,lamda]
-        result = optimize.fmin(cost_function,initial_guess,maxfun=1000,maxiter=1000)
-        A_,growth_rate_d = result 
-        
-        ####### for error term to correct the predictions
-        if date_to_calc.date() == MAX_DATE_CASES:
-            ef = [error_forget_factor**i for i in range(len(region_data))]
-            region_data_hist = REGIONS_CURRENT[REGIONS_CURRENT["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"' and date == '"+date_to_calc.date().strftime("%Y-%m-%d")+"'")
+            region,country_of_state,pop = row
+            #print(region,country_of_state,pop)
+            if region in TD_regions:
+                IS_TD.append(1)
+            else:
+                IS_TD.append(0)
+                
             
-            error_total_cases = float(region_data_hist["total_cases"].values[-1]) - float(region_data["confirmed"].values[-1])
-            error_daily_cases = region_data_hist["daily_cases"].values[-1] - region_data["confirmed"].diff().values[-WINDOW:].mean() 
-            error_daily_deaths = region_data_hist["daily_deaths"].values[-1] - region_data["deaths"].diff().values[-WINDOW:].mean()
-            error_growth_rates = region_data_hist["growth_rate"].values[-1] - growth_rate_c 
-            error_growth_rates_deaths = region_data_hist["growth_rate_deaths"].values[-1] - growth_rate_d
-            error_Re = region_data_hist["Re"].values[-1] - ( 1 + growth_rate_c*5 )
-            #print(error_total_cases,error_daily_cases,)
-            '''assert type(error_total_cases)==float or type(error_total_cases)==int 
-            assert type(error_daily_cases)==float or type(error_daily_cases)==int
-            assert type(error_daily_deaths)==float or type(error_daily_deaths)==int
-            assert type(error_growth_rates)==float or type(error_growth_rates)==int
-            assert type(error_growth_rates_deaths)==float or  type(error_growth_rates_deaths)==int 
-            assert type(error_Re)==float or type(error_Re)==int'''
+
+            #region_data = df_cases_pred2[df_cases_pred2["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"'")
+            region_data = df_cases_pred2[df_cases_pred2["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"' and date <= '"+date_to_calc.date().strftime("%Y-%m-%d")+"'")
             
-        
-        
-            errors_total_cases.append(error_total_cases)
-            errors_daily_cases.append(error_daily_cases)
-            errors_daily_deaths.append(error_daily_deaths)
-            errors_growth_rates.append(error_growth_rates)
-            errors_growth_rates_deaths.append(error_growth_rates_deaths)
-            errors_Re.append(error_Re)
-        
-        ##################
-        
-        growth_rates.append(growth_rate_c)
-        growth_rates_deaths.append(growth_rate_d)
             
-        total_cases.append(float(region_data["confirmed"].values[-1]))
+            
+            
+            if day_risk % 7 == 0:
+                D = region_data["confirmed"]
+                initial_guess = [A,lamda]
+                result = optimize.fmin(cost_function,initial_guess,maxfun=1000,maxiter=1000,disp = False)
+                A_,growth_rate_c = result 
+
+
+                D = region_data["deaths"]#D = COUNTRY_DATA[country]["JHU_ConfirmedDeaths.data"]
+                initial_guess = [A,lamda]
+                result = optimize.fmin(cost_function,initial_guess,maxfun=1000,maxiter=1000,disp = False)
+                A_,growth_rate_d = result 
+                if day_risk == 0:
+                    print(region,growth_rate_c)
+                
+
+            else:
+                growth_rate_c = np.NaN
+                growth_rate_d = np.NaN
+
+            #print(date_of_calc,region,growth_rate_c)
+
+
+         
+            ####### for error term to correct the predictions
+            if date_to_calc.date() == MAX_DATE_CASES:
+                ef = [error_forget_factor**i for i in range(len(region_data))]
+                region_data_hist = REGIONS_CURRENT[REGIONS_CURRENT["Country/Region"]== region].query("country_of_state == '"+str(country_of_state)+"' and date == '"+date_to_calc.date().strftime("%Y-%m-%d")+"'")
+                
+                ## old method
+                '''error_total_cases = float(region_data_hist["total_cases"].values[-1]) - float(region_data["confirmed"].values[-1])
+                error_daily_cases = region_data_hist["daily_cases"].values[-1] - region_data["confirmed"].diff().values[-WINDOW:].mean() 
+                error_daily_deaths = region_data_hist["daily_deaths"].values[-1] - region_data["deaths"].diff().values[-WINDOW:].mean()
+                error_growth_rates = region_data_hist["growth_rate"].values[-1] - growth_rate_c 
+                error_growth_rates_deaths = region_data_hist["growth_rate_deaths"].values[-1] - growth_rate_d
+                error_Re = region_data_hist["Re"].values[-1] - ( 1 + growth_rate_c*5 )'''
+
+                # new method
+                error_total_cases = float(region_data_hist["total_cases"].values[-1])/float(region_data["confirmed"].values[-1])
+                error_daily_cases = region_data_hist["daily_cases"].values[-1]/ (0.001+ region_data["confirmed"].diff().values[-WINDOW_RISK:].mean() )
+                error_daily_deaths = region_data_hist["daily_deaths"].values[-1]/( 0.001 + region_data["deaths"].diff().values[-WINDOW_RISK:].mean() )
+                error_growth_rates = region_data_hist["growth_rate"].values[-1]/ (0.00001 + growth_rate_c )
+                error_growth_rates_deaths = region_data_hist["growth_rate_deaths"].values[-1]/ ( 0.00001 + growth_rate_d)
+                error_Re = region_data_hist["Re"].values[-1]/(0.00001 + 1 + growth_rate_c*5 )
+
+
+                                
+                #print(error_total_cases,error_daily_cases,)
+                '''assert type(error_total_cases)==float or type(error_total_cases)==int 
+                assert type(error_daily_cases)==float or type(error_daily_cases)==int
+                assert type(error_daily_deaths)==float or type(error_daily_deaths)==int
+                assert type(error_growth_rates)==float or type(error_growth_rates)==int
+                assert type(error_growth_rates_deaths)==float or  type(error_growth_rates_deaths)==int 
+                assert type(error_Re)==float or type(error_Re)==int'''
+                
+            
+            
+                errors_total_cases.append(error_total_cases)
+                errors_daily_cases.append(error_daily_cases)
+                errors_daily_deaths.append(error_daily_deaths)
+                errors_growth_rates.append(error_growth_rates)
+                errors_growth_rates_deaths.append(error_growth_rates_deaths)
+                errors_Re.append(error_Re)
+
+                '''if region == 'Pune':
+                    print(date_to_calc)
+                    print(region)
+                    print(error_daily_deaths)
+                    print(region_data["deaths"].diff().values[-WINDOW_RISK:].mean() )
+                    print(region_data_hist["daily_deaths"].values[-1])
+                    
+                    print("----")'''
+            
+            ##################
+            
+            growth_rates.append(growth_rate_c)
+            growth_rates_deaths.append(growth_rate_d)
+                
+            total_cases.append(float(region_data["confirmed"].values[-1]))
+            
+            #if is_pred == "Actual":
+            
+            
+            daily_cases.append(region_data["confirmed"].diff().values[-WINDOW_RISK:].mean())
+            daily_deaths.append(region_data["deaths"].diff().values[-WINDOW_RISK:].mean())
+            #if is_pred == 'Predicted':
+            #daily_cases.append(region_data["confirmed"].diff().values[-1])
+            #daily_deaths.append(region_data["deaths"].diff().values[-1])
+
         
-        #if is_pred == "Actual":
+        #old method
+        #C = error_forget_factor**power_error_factor # error percentage adjustment
+        #power_error_factor = power_error_factor + 1
+
+        growth_rates = np.array(growth_rates)*np.array(errors_growth_rates)# np.array(growth_rates) + C*np.array(errors_growth_rates) # old method
+        growth_rates_deaths = np.array(growth_rates_deaths)*np.array(errors_growth_rates_deaths)#np.array(growth_rates_deaths) + C*np.array(errors_growth_rates_deaths) # old method
+        growth_rates[growth_rates<-0.5] = -0.5 # clip the negative value
+        growth_rates_deaths[growth_rates_deaths<-0.5] = -0.5 # clip the negative value
+        regions["is_TD"] = IS_TD
+        regions["growth_rate"] = growth_rates
+        regions["growth_rate_deaths"] = growth_rates_deaths
+        Re = (1 + growth_rates*5 )*np.array(errors_Re) #(1 + growth_rates*5 ) + C*np.array(errors_Re) # old method
+        Re[Re<0] = 0
+        regions["Re"] = Re
+        regions["total_cases"] = total_cases*np.array(errors_total_cases) #total_cases + C*np.array(errors_total_cases) # old method
+        regions["total_cases_per_M"] = 1000000*regions["total_cases"]/regions["population"]
+        daily_cases = np.array(daily_cases)*np.array(errors_daily_cases) #np.array(daily_cases) + C*np.array(errors_daily_cases) # old method
+        daily_cases[daily_cases<0]=0
+        daily_deaths = np.array(daily_deaths)*np.array(errors_daily_deaths)#np.array(daily_deaths) + C*np.array(errors_daily_deaths) # old method
+        daily_deaths[daily_deaths<0]=0
+        regions["daily_cases"] = daily_cases
+        regions["daily_cases_per_M"] = 1000000*regions["daily_cases"]/regions["population"]
+        regions["daily_deaths"] = daily_deaths
+        regions["daily_deaths_per_M"] = 1000000*regions["daily_deaths"]/regions["population"]
+        regions["is_pred"] = is_pred
+        REGIONS = pd.concat((REGIONS,regions),axis=0)
+
+        '''print(date_to_calc)
+        print(region)
+        print(error_daily_cases)
+        print(region_data["confirmed"].diff().values[-WINDOW_RISK:].mean() )
+        print(region_data_hist["daily_cases"].values[-1])
+        print(daily_deaths)
+        print("----")'''
         
-        
-        daily_cases.append(region_data["confirmed"].diff().values[-WINDOW:].mean())
-        daily_deaths.append(region_data["deaths"].diff().values[-WINDOW:].mean())
-        #if is_pred == 'Predicted':
-        #daily_cases.append(region_data["confirmed"].diff().values[-1])
-        #daily_deaths.append(region_data["deaths"].diff().values[-1])
-    
-    
-    C = error_forget_factor**power_error_factor # error percentage adjustment
-    power_error_factor = power_error_factor + 1
+        if day_risk % 7 == 0:
+            print(int(100*day_risk/380.0),"% done")
 
-    growth_rates = np.array(growth_rates) + C*np.array(errors_growth_rates)
-    growth_rates_deaths = np.array(growth_rates_deaths) + C*np.array(errors_growth_rates_deaths)
-    growth_rates[growth_rates<-0.5] = -0.5 # clip the negative value
-    growth_rates_deaths[growth_rates_deaths<-0.5] = -0.5 # clip the negative value
-    regions["is_TD"] = IS_TD
-    regions["growth_rate"] = growth_rates
-    regions["growth_rate_deaths"] = growth_rates_deaths
-    Re = (1 + growth_rates*5 ) + C*np.array(errors_Re)
-    Re[Re<0] = 0
-    regions["Re"] = Re
-    regions["total_cases"] = total_cases + C*np.array(errors_total_cases)
-    regions["total_cases_per_M"] = 1000000*regions["total_cases"]/regions["population"]
-    daily_cases = np.array(daily_cases) + C*np.array(errors_daily_cases)
-    daily_cases[daily_cases<0]=0
-    daily_deaths = np.array(daily_deaths) + C*np.array(errors_daily_deaths)
-    daily_deaths[daily_deaths<0]=0
-    regions["daily_cases"] = daily_cases
-    regions["daily_cases_per_M"] = 1000000*regions["daily_cases"]/regions["population"]
-    regions["daily_deaths"] = daily_deaths
-    regions["daily_deaths_per_M"] = 1000000*regions["daily_deaths"]/regions["population"]
-    regions["is_pred"] = is_pred
-    REGIONS = pd.concat((REGIONS,regions),axis=0)
+        day_risk = day_risk + 1
 
 
-REGIONS["date_of_calc"] = MAX_DATE_CASES.strftime("%Y-%m-%d")
-create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
-copy_to_sql(df=REGIONS,table_name="regional_intensity_predictions",schema_name="rto",if_exists="append",primary_index="Country/Region")
-remove_context()
+    REGIONS["date_of_calc"] = MAX_DATE_CASES.strftime("%Y-%m-%d")
 
+
+    # fill the NaNs for growth rates and Re with interpolation
+    REGIONS_NEW = pd.DataFrame([],columns=['Country/Region', 'country_of_state', 'population', 'date', 'is_TD',
+           'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
+           'total_cases_per_M', 'daily_cases', 'daily_cases_per_M', 'daily_deaths',
+           'daily_deaths_per_M'])
+    for row in regions[["Country/Region","country_of_state","population"]].values:
+        region,country_of_state,pop = row
+        #print(region,country_of_state)
+        df_new = REGIONS[REGIONS["Country/Region"]==region].query("country_of_state == '{}'".format(country_of_state)).reset_index()
+        df_new["growth_rate"] = df_new["growth_rate"].interpolate().values
+        df_new["growth_rate_deaths"] = df_new["growth_rate_deaths"].interpolate().values
+        df_new["Re"] = df_new["Re"].interpolate().values
+        del df_new["index"]
+        REGIONS_NEW = pd.concat((REGIONS_NEW,df_new),axis=0)
+
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    copy_to_sql(df=REGIONS_NEW,table_name="regional_intensity_predictions",schema_name="rto",if_exists="append",primary_index="Country/Region")
+    remove_context()
+    logger.info("rto.regional_intensity_predictions done. Risk calculation for future 360 days.")
+    print("rto.regional_intensity_predictions updated.")
+else:
+    print("rto.regional_intensity_predictions already updated.")
 
 ###################################################################################################################################
-logger.info("rto.regional_intensity_predictions done. Risk calculation for future 360 days.")
+
 
 ################################################# update the phase timelines table #############################################
-
+# to check if the table is already updated or not.
 connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
-
 cur = connection.cursor()
-
-sql_command = """
-insert into rto.intensity_fixed_params
-select * from
-(select
-"date",
-"Country/Region",
-country_of_state,
-date_of_calc,
-daily_cases_per_M,
-daily_deaths_per_M,
-growth_rate,
-growth_rate_deaths,
-Re,
-
--LN((cast(2.0 as float)/(0.99+1.0))-1)/(20.0) as alpha_cases_sql
-,(2.0 / (1 + EXP(-alpha_cases_sql*(daily_cases_per_M/10)))) - 1.0 as risk_factor_cases_sql
-
-,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(1.0) as alpha_deaths_sql
-,(2.0 / (1 + EXP(-alpha_deaths_sql*(daily_deaths_per_M/10)))) - 1.0 as risk_factor_deaths_sql
-
-,-LN((cast(1.0 as float)/(0.99))-1)/(0.2) as alpha_growth_rate_sql
-,(1.0 / (1 + EXP(-alpha_growth_rate_sql*(growth_rate)))) as risk_factor_growth_rate_sql
-
-,-LN((cast(1.0 as float)/(0.99))-1)/(0.2) as alpha_growth_rate_deaths_sql
-,(1.0 / (1 + EXP(-alpha_growth_rate_deaths_sql*(growth_rate_deaths)))) as risk_factor_growth_rate_deaths_sql
-
-,-LN((cast(1.0 as float)/(0.99))-1)/(1.4-1.0) as alpha_Re_sql
-,(1.0 / (1 + EXP(-alpha_Re_sql*(Re-1.0)))) as risk_factor_Re_sql
-
-,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(0.75) as alpha_vacc_sql
-,1  - ( (2.0 / (1 + EXP(-alpha_vacc_sql*pred_vacc_perc))) - 1.0) as risk_factor_vacc_sql
-
-
-,(4*risk_factor_cases_sql+
-1*risk_factor_cases_sql*risk_factor_growth_rate_sql + 
-4*risk_factor_deaths_sql+
-1*risk_factor_deaths_sql*risk_factor_growth_rate_deaths_sql + 
-1*risk_factor_cases_sql*risk_factor_Re_sql +
-4*risk_factor_vacc_sql)/
-(4+1+4+1+1+4) as risk
-
-from rto.regional_intensity_pred_with_vacc_view
-
-) tmp1
-inner join 
-
-(select site_id
-,country_region
-,state_province
-,county_district
-,city
-,"Country/Region" as "Country/Region2"  
-,country_of_state as country_of_state2
-,population as population
-,date_of_calc as date_of_calc2
-,is_TD as is_TD2
-,daily_cases_per_M as daily_cases_per_M_current
-,daily_deaths_per_M as daily_deaths_per_M_current
-,Re as Re_current
-,growth_rate as growth_rate_current
-,growth_rate_deaths as growth_rate_deaths_current
-,granularity
-from rto.regional_intensity_profiling_future_view) tmp5
-on tmp5."Country/Region2" = tmp1."Country/Region" and tmp5.country_of_state2 = tmp1.country_of_state and tmp5.date_of_calc2 = date_of_calc;
-"""
-
+sql_command = """select max(date_of_calc) from rto.intensity_fixed_params where "Country/Region" = 'Wake';"""
 cur.execute(sql_command)
 res = cur.fetchall()
+cur.close()
+max_date_phase_tab = res[0][0]
+#
+
+if max_date_phase_tab != MAX_DATE_CASES.strftime("%Y-%m-%d"):
+
+    connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
+
+    cur = connection.cursor()
+
+    sql_command = """
+    insert into rto.intensity_fixed_params
+    select * from
+    (select
+    "date",
+    "Country/Region",
+    country_of_state,
+    date_of_calc,
+    daily_cases_per_M,
+    daily_deaths_per_M,
+    growth_rate,
+    growth_rate_deaths,
+    Re,
+
+    -LN((cast(2.0 as float)/(0.99+1.0))-1)/(20.0) as alpha_cases_sql
+    ,(2.0 / (1 + EXP(-alpha_cases_sql*(daily_cases_per_M/10)))) - 1.0 as risk_factor_cases_sql
+
+    ,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(1.0) as alpha_deaths_sql
+    ,(2.0 / (1 + EXP(-alpha_deaths_sql*(daily_deaths_per_M/10)))) - 1.0 as risk_factor_deaths_sql
+
+    ,-LN((cast(1.0 as float)/(0.99))-1)/(0.2) as alpha_growth_rate_sql
+    ,(1.0 / (1 + EXP(-alpha_growth_rate_sql*(growth_rate)))) as risk_factor_growth_rate_sql
+
+    ,-LN((cast(1.0 as float)/(0.99))-1)/(0.2) as alpha_growth_rate_deaths_sql
+    ,(1.0 / (1 + EXP(-alpha_growth_rate_deaths_sql*(growth_rate_deaths)))) as risk_factor_growth_rate_deaths_sql
+
+    ,-LN((cast(1.0 as float)/(0.99))-1)/(1.4-1.0) as alpha_Re_sql
+    ,(1.0 / (1 + EXP(-alpha_Re_sql*(Re-1.0)))) as risk_factor_Re_sql
+
+    ,-LN((cast(2.0 as float)/(0.99+1.0))-1)/(0.75) as alpha_vacc_sql
+    ,1  - ( (2.0 / (1 + EXP(-alpha_vacc_sql*pred_vacc_perc))) - 1.0) as risk_factor_vacc_sql
+
+
+    ,(4*risk_factor_cases_sql+
+    1*risk_factor_cases_sql*risk_factor_growth_rate_sql + 
+    4*risk_factor_deaths_sql+
+    1*risk_factor_deaths_sql*risk_factor_growth_rate_deaths_sql + 
+    1*risk_factor_cases_sql*risk_factor_Re_sql +
+    4*risk_factor_vacc_sql)/
+    (4+1+4+1+1+4) as risk
+
+    from rto.regional_intensity_pred_with_vacc_view
+
+    ) tmp1
+    inner join 
+
+    (select site_id
+    ,country_region
+    ,state_province
+    ,county_district
+    ,city
+    ,"Country/Region" as "Country/Region2"  
+    ,country_of_state as country_of_state2
+    ,population as population
+    ,date_of_calc as date_of_calc2
+    ,is_TD as is_TD2
+    ,daily_cases_per_M as daily_cases_per_M_current
+    ,daily_deaths_per_M as daily_deaths_per_M_current
+    ,Re as Re_current
+    ,growth_rate as growth_rate_current
+    ,growth_rate_deaths as growth_rate_deaths_current
+    ,granularity
+    from rto.regional_intensity_profiling_future_view) tmp5
+    on tmp5."Country/Region2" = tmp1."Country/Region" and tmp5.country_of_state2 = tmp1.country_of_state and tmp5.date_of_calc2 = date_of_calc;
+    """
+
+    cur.execute(sql_command)
+    res = cur.fetchall()
+    logger.info("rto.intensity_fixed_params done. Updated the phase timelines table.")
+    print("rto.intensity_fixed_params updated.")
+else:
+    print("rto.intensity_fixed_params already updated.")
 
 
 ################################################### Vaccincation Data ###############################################
@@ -1594,6 +1826,6 @@ remove_context()
 
 print("Script executed Successfully!")
 
-logger.info("rto.intensity_fixed_params done. Updated the phase timelines table.")
+
 logger.info("Script executed Successfully!")
 
