@@ -30,6 +30,8 @@ delete from rto.regional_intensity_predictions where date_of_calc >'2021-06-29';
 delete from rto.intensity_fixed_params where date_of_calc > '2021-06-29';
 delete from rto.LG_predicted_cases_params where date_of_calc > '2021-06-29';
 '''
+import warnings 
+#warnings.filterwarnings("ignore", category=RuntimeWarning).
 import logging
 import datetime
 import pandas as pd
@@ -398,11 +400,11 @@ from scipy import stats
 
 forget_factor = 0.9
 WINDOW = 30
-def get_predictions_sigmoid(x,alpha,lamda = 1,beta = 0):
-    cases = (lamda / (1 + np.exp(-alpha*(x-beta))))
+def get_predictions_sigmoid(x,alpha,lamda = 1,beta = 0, gamma = 1.):
+    cases = (lamda / (1 + gamma*np.exp(-alpha*(x-beta)))**(1./gamma))
     return cases
 def cost_predictions(params):
-    y = get_predictions_sigmoid(np.arange(0,len(actual),1),params[0],params[1],params[2])
+    y = get_predictions_sigmoid(np.arange(0,len(actual),1),params[0],params[1],params[2],params[3])
     
     # in case fitting on diff is required
     y = np.diff(y)
@@ -415,7 +417,7 @@ def cost_predictions(params):
     return np.sum(f[-WINDOW:]*(y[-WINDOW:] - actual2[-WINDOW:])**2)
 
 def cost_actual(params):
-    y = get_predictions_sigmoid(np.arange(0,len(actual)+365,1),params[0],params[1],params[2])
+    y = get_predictions_sigmoid(np.arange(0,len(actual)+365,1),params[0],params[1],params[2],params[3])
     is_growing = False
     # in case fitting on diff is required
     y = np.diff(y)
@@ -477,7 +479,7 @@ def get_growth_rate(data,A,lamda):
 
 def get_unknown_immune_pop(mobility):
     max_possible_immune_pop = 0.95
-    imm = 1- ( (max_possible_immune_pop) / (1 + np.exp(-0.1*(mobility))) )
+    imm = 1- ( (max_possible_immune_pop) / (1 + np.exp(-0.05*(mobility))) )
     return imm
 
 def get_shape_trend(data):
@@ -568,8 +570,12 @@ regions = df_cases[["Country/Region","country_of_state","population","vacc_perc"
 #sql_command = """delete from rto.LG_predicted_cases where date_of_calc ='{}';""".format((max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
 #print(sql_command)
 model_params = []
-max_bound_beta = CURRENT_DAY_SINCE_START + 90#1000
+max_bound_beta = CURRENT_DAY_SINCE_START + 60#1000
 max_bound_alpha = 0.1
+min_bound_alpha = 0.01
+min_bound_beta = 200
+min_bound_gamma = 1.0
+max_bound_gamma = 1.0
 WINDOWS = [60]#np.arange(30,60)
 FORGET_FACTORS=[0.99,0.9,0.85,0.8]#[0.9,0.95,0.99]#0.999,
 MA_WINDOWS = [-1]#[3,7,15]#[2,7,14]
@@ -587,6 +593,7 @@ if len(dates_to_pred) > 0:
                                 (select a.*, rank() over(partition by "Country/Region",country_of_state order by best_score_wape asc)  as rank_score
                                 from rto.LG_predicted_cases_params a where date_of_calc > (select max(date_of_calc) from rto.LG_predicted_cases_params)-7) tmp
                                 where rank_score =1;""")
+
 
     for date_to_pred in dates_to_pred:
         max_date_cases = date_to_pred.strftime("%Y-%m-%d")
@@ -618,9 +625,9 @@ if len(dates_to_pred) > 0:
             else:
                 unknown_immune_pop = 1.0
             #print(vacc_perc,avg_mob,unknown_immune_pop)
-            suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + vacc_perc*population) )
+            suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + 1.3*vacc_perc*population) )
             #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
-            bounds = Bounds([0,0,200],[max_bound_alpha, suscepible_pop,max_bound_beta])#np.max(actual)/max_infected
+            bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])#np.max(actual)/max_infected
 
                 
             PREDICTIONS = []
@@ -629,9 +636,10 @@ if len(dates_to_pred) > 0:
             win_best,fg_best =0,0
             
             if len(prev_params_item)>0 and prev_params_item["best_score_wape"].values[0] < 1.0:
-                x0 = [ prev_params_item["alpha"].values[0], prev_params_item["lamda"].values[0], prev_params_item["beta"].values[0] ]
+                x0 = [ prev_params_item["alpha"].values[0], prev_params_item["lamda"].values[0], prev_params_item["beta"].values[0],prev_params_item["gamma"].values[0] ]
             else:
-                x0 = [0.05,np.max(actual),200]
+                x0 = [0.05,np.max(actual),200,1]
+            print("x0:",x0,",bounds:",bounds)
             for ma_win in MA_WINDOWS:
                 for fg in FORGET_FACTORS:
                     forget_factor = fg
@@ -642,20 +650,23 @@ if len(dates_to_pred) > 0:
                         #actual = savgol_filter(actual_all, ma_win, 2)
                         #x0 = [0.05,np.max(actual),200]
                         #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
+                        #for j in range(3):
+                        #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                    
                         res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
-                        alpha,lamda,beta = res.x
-                        current_score = cost_actual([alpha,lamda,beta])
-                        print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                        alpha,lamda,beta,gamma = res.x
+                        current_score = cost_actual([alpha,lamda,beta,gamma])
+                        #print(ma_win,win,fg,alpha,lamda,beta,current_score)
                         if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
                             best_score = current_score
-                            alpha_best,lamda_best,beta_best = alpha,lamda,beta
+                            alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
                             win_best,fg_best = win,fg
             
-            print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,"best_score=",best_score)
-            model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,best_score])
+            print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score)
+            model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,gamma_best,best_score])
             end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
             end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
-            predictions = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best)
+            predictions = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best,gamma_best)
             PREDICTIONS.append(predictions)
 
             PREDICTIONS = np.array(PREDICTIONS)
@@ -703,7 +714,7 @@ else:
     print("rto.LG_predicted_cases already updated")
 
 if len(model_params) > 0:
-    model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","best_score_wape"])
+    model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","gamma","best_score_wape"])
     copy_to_sql(df=model_params,table_name="LG_predicted_cases_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
 
 try:
@@ -820,8 +831,8 @@ if len(dates_to_pred)>0:
             cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
             mortality_rate = actual_all[-1]/cases[-1]
             pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
-            bounds = Bounds([0, 0,0], [max_bound_alpha, mortality_rate*pred_cases[-1] - actual_all[-1],max_bound_beta])#np.max(actual)/max_infected
-            
+            bounds = Bounds([min_bound_alpha, 0,min_bound_beta,min_bound_gamma], [max_bound_alpha, mortality_rate*pred_cases[-1] - actual_all[-1] ,max_bound_beta,max_bound_gamma])#np.max(actual)/max_infected
+            #
             
             PREDICTIONS_DEATHS = []
             best_score = np.inf
@@ -829,9 +840,9 @@ if len(dates_to_pred)>0:
             win_best,fg_best =0,0
 
             if len(prev_params_item)>0 and prev_params_item["best_score_wape"].values[0] < 1.0:
-                x0 = [ prev_params_item["alpha"].values[0], prev_params_item["lamda"].values[0], prev_params_item["beta"].values[0] ]
+                x0 = [ prev_params_item["alpha"].values[0], prev_params_item["lamda"].values[0], prev_params_item["beta"].values[0],prev_params_item["gamma"].values[0] ]
             else:
-                x0 = [0.05,np.max(actual),200]
+                x0 = [0.05,np.max(actual),200,1]
             
             for ma_win in MA_WINDOWS:
                 for fg in FORGET_FACTORS:
@@ -843,21 +854,23 @@ if len(dates_to_pred)>0:
                         #actual = savgol_filter(actual_all, ma_win, 2)
                         #x0 = [0.05,actual_all[-1],200]
                         #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
+                        #for j in range(3):
+                        #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")
-                        alpha,lamda,beta = res.x
-                        current_score = cost_actual([alpha,lamda,beta])
-                        print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                        alpha,lamda,beta,gamma = res.x
+                        current_score = cost_actual([alpha,lamda,beta,gamma])
+                        #print(ma_win,win,fg,alpha,lamda,beta,current_score)
                         if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
                             best_score = current_score
-                            alpha_best,lamda_best,beta_best = alpha,lamda,beta
+                            alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
                             win_best,fg_best = win,fg
                         
-            print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,"best_score=",best_score) 
-            model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,best_score])
+            print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score) 
+            model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,gamma_best,best_score])
 
-            end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
+            end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best,gamma_best))
             end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
-            predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best)
+            predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best,gamma_best)
             PREDICTIONS_DEATHS.append(predictions_deaths)
                     
             PREDICTIONS_DEATHS = np.array(PREDICTIONS_DEATHS)
@@ -919,7 +932,7 @@ else:
     print("rto.LG_predicted_deaths already updated")
 
 if len(model_params) > 0:
-    model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","best_score_wape"])
+    model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","gamma","best_score_wape"])
     copy_to_sql(df=model_params,table_name="LG_predicted_deaths_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
 
 remove_context()
