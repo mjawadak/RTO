@@ -1,6 +1,6 @@
 '''
-Version: optimizing on daily difference with death correction and SG_Filter, optimizing with vacc data as well
-This code has been tested on Python3.6 and can take more that hour to execute.
+Version: optimizing on daily difference with death correction and SG_Filter, optimizing with vacc data as well. Added an exp model -> Used when the growth rate is negative.
+This code has been tested on Python3.6 and can an hour to execute.
 In this script, we calculate the intensity score and predictions (cases and deaths) for COVID-19 in different regions.
 The base tables used are rto.daily_global, rto.daily_us, rto.daily_india, rto.country_population, rto.population_us and rto.population_india_states.
 
@@ -21,14 +21,15 @@ select cast(max("date") as date) from rto.regional_intensity_profiling
 
 After successful exection of the script, "Script executed Successfully!" should be printed out. In case of any errors, revert back using the below script (update the date):
 
-delete from rto.regional_intensity_profiling where "date">'2021-06-29';
-delete from rto.LG_predicted_cases where date_of_calc >'2021-06-29';
-delete from rto.LG_predicted_cases_with_conf where date_of_calc >'2021-06-29';
-delete from rto.LG_predicted_deaths where date_of_calc >'2021-06-29';
-delete from rto.regional_intensity_profiling_future where date_of_calc >'2021-06-29';
-delete from rto.regional_intensity_predictions where date_of_calc >'2021-06-29';
-delete from rto.intensity_fixed_params where date_of_calc > '2021-06-29';
-delete from rto.LG_predicted_cases_params where date_of_calc > '2021-06-29';
+delete from rto.regional_intensity_profiling where "date">'2021-08-08';
+delete from rto.LG_predicted_cases where date_of_calc >'2021-08-08';
+delete from rto.LG_predicted_cases_with_conf where date_of_calc >'2021-08-08';
+delete from rto.LG_predicted_deaths where date_of_calc >'2021-08-08';
+delete from rto.regional_intensity_profiling_future where date_of_calc >'2021-08-08';
+delete from rto.regional_intensity_predictions where date_of_calc >'2021-08-08';
+delete from rto.intensity_fixed_params where date_of_calc > '2021-08-08';
+delete from rto.LG_predicted_cases_params where date_of_calc > '2021-08-08';
+delete from rto.LG_predicted_deaths_params where date_of_calc > '2021-08-08';
 '''
 import warnings 
 #warnings.filterwarnings("ignore", category=RuntimeWarning).
@@ -49,6 +50,7 @@ from teradataml import create_context,remove_context,copy_to_sql,DataFrame
 from scipy.signal import savgol_filter
 from sklearn.metrics import mean_absolute_error
 import copy
+import seaborn as sns
 
 # Initialize logging
 logger = logging.getLogger()
@@ -403,6 +405,9 @@ WINDOW = 30
 def get_predictions_sigmoid(x,alpha,lamda = 1,beta = 0, gamma = 1.):
     cases = (lamda / (1 + gamma*np.exp(-alpha*(x-beta)))**(1./gamma))
     return cases
+def get_predictions_sigmoid_exp(t, A, lamda): # y = A*exp(lambda*t)
+    y = A*np.exp(lamda*t)
+    return y
 def cost_predictions(params):
     y = get_predictions_sigmoid(np.arange(0,len(actual),1),params[0],params[1],params[2],params[3])
     
@@ -416,32 +421,27 @@ def cost_predictions(params):
     
     return np.sum(f[-WINDOW:]*(y[-WINDOW:] - actual2[-WINDOW:])**2)
 
-def cost_actual(params):
-    y = get_predictions_sigmoid(np.arange(0,len(actual)+365,1),params[0],params[1],params[2],params[3])
-    is_growing = False
-    # in case fitting on diff is required
-    y = np.diff(y)
+def cost_actual(params,model_type = 'LG'):
     actual2= np.diff(actual)
-    #actual = np.diff(actual)
+    assert model_type == 'LG' or model_type == 'exp'
     win_actual = window_for_averaging#2*window_for_averaging
-    start_pred_val = y[-win_actual] 
-    max_pred_val = max(y)
-    if start_pred_val < max_pred_val:
-        is_growing = True
-    
-    
-    last_actual_val = np.max(np.diff(actual_all)[-win_actual:])
-    #print(start_pred_val,max_pred_val,last_actual_val,len(y))
-    #if is_growing == True and last_actual_val > max_pred_val and last_actual_val > 100:
-    #    return 100000000000000
-        
-
-    #return np.sum((y[len(actual)-win_actual:len(actual)] - actual2[-win_actual:])**2)
     den = float(np.average(actual2[-win_actual:]))
-    #print(y[len(actual)-win_actual:len(actual)])
+    
+
     if den == 0:
         return 0
-    return mean_absolute_error(y[len(actual)-win_actual:len(actual)],actual2[-win_actual:]) / den
+    if model_type == 'LG':
+        y = get_predictions_sigmoid(np.arange(0,len(actual)+365,1),params[0],params[1],params[2],params[3])
+        y = np.diff(y)        
+        
+        return mean_absolute_error(y[len(actual)-win_actual:len(actual)],actual2[-win_actual:]) / den
+    elif model_type == 'exp': 
+        x = np.arange(0,365+window_for_averaging,1)
+        y = func(x,params[0],params[1])
+
+        return mean_absolute_error(y[0:win_actual],actual2[-win_actual:]) / den
+
+    
 
 dates = pd.date_range(start='2020-01-22', end = '2023-06-01')
 def get_end_date(p_data):
@@ -474,8 +474,8 @@ def get_growth_rate(data,A,lamda):
     D = data
     initial_guess = [A,lamda]
     result = optimize.fmin(cost_function,initial_guess,maxfun=1000,maxiter=1000)
-    A_,growth_rate = result 
-    return growth_rate
+    A__,growth_rate__ = result 
+    return growth_rate__,A__
 
 def get_unknown_immune_pop(mobility):
     max_possible_immune_pop = 0.95
@@ -569,16 +569,21 @@ regions = df_cases[["Country/Region","country_of_state","population","vacc_perc"
 
 #sql_command = """delete from rto.LG_predicted_cases where date_of_calc ='{}';""".format((max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
 #print(sql_command)
+
 model_params = []
-max_bound_beta = CURRENT_DAY_SINCE_START + 60#1000
+PEAK_WIN = 30
+max_bound_beta = CURRENT_DAY_SINCE_START + PEAK_WIN#1000
 max_bound_alpha = 0.1
 min_bound_alpha = 0.01
-min_bound_beta = 200
+min_bound_beta = CURRENT_DAY_SINCE_START - 15#300 #200
 min_bound_gamma = 1.0
 max_bound_gamma = 1.0
 WINDOWS = [60]#np.arange(30,60)
 FORGET_FACTORS=[0.99,0.9,0.85,0.8]#[0.9,0.95,0.99]#0.999,
 MA_WINDOWS = [-1]#[3,7,15]#[2,7,14]
+
+best_scores_all = []
+best_scores_all_dict = {}
 
 print(dates_to_pred)
 if len(dates_to_pred) > 0:
@@ -617,61 +622,89 @@ if len(dates_to_pred) > 0:
                 vacc_perc = 0.1
             
             D=df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].rolling(window=14).mean()
-            WINDOW_RISK = 7
-            gr = get_growth_rate(D,1000,0.001)
-            #print("growth",gr)
-            if gr > 0:
-                unknown_immune_pop = get_unknown_immune_pop(avg_mob)
-            else:
-                unknown_immune_pop = 1.0
-            #print(vacc_perc,avg_mob,unknown_immune_pop)
-            suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + 1.3*vacc_perc*population) )
-            #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
-            bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])#np.max(actual)/max_infected
-
-                
+            WINDOW_RISK = 14
             PREDICTIONS = []
-            best_score = np.inf
-            alpha_best,lamda_best,beta_best=0.02,0,0
-            win_best,fg_best =0,0
+            ROLLING_MEAN_FOR_GROWTH_CALC = 0
+            gr,A_ = get_growth_rate(D,1000,0.001)
+            print("growth",gr)
+            if gr > -0.008:
+                unknown_immune_pop = get_unknown_immune_pop(avg_mob)
             
-            if len(prev_params_item)>0 and prev_params_item["best_score_wape"].values[0] < 1.0:
-                x0 = [ prev_params_item["alpha"].values[0], prev_params_item["lamda"].values[0], prev_params_item["beta"].values[0],prev_params_item["gamma"].values[0] ]
-            else:
-                x0 = [0.05,np.max(actual),200,1]
-            print("x0:",x0,",bounds:",bounds)
-            for ma_win in MA_WINDOWS:
-                for fg in FORGET_FACTORS:
-                    forget_factor = fg
+                #print(vacc_perc,avg_mob,unknown_immune_pop)
+                suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + 1.3*vacc_perc*population) )
+                #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
+                #np.max(actual)/max_infected
+                bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
 
-                    for win in WINDOWS:
-                        WINDOW = win
-                        #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
-                        #actual = savgol_filter(actual_all, ma_win, 2)
-                        #x0 = [0.05,np.max(actual),200]
-                        #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
-                        #for j in range(3):
-                        #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                     
-                        res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
-                        alpha,lamda,beta,gamma = res.x
-                        current_score = cost_actual([alpha,lamda,beta,gamma])
-                        #print(ma_win,win,fg,alpha,lamda,beta,current_score)
-                        if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
-                            best_score = current_score
-                            alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
-                            win_best,fg_best = win,fg
-            
-            print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score)
-            model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,gamma_best,best_score])
-            end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
-            end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
-            predictions = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best,gamma_best)
-            PREDICTIONS.append(predictions)
+                
+                best_score = np.inf
+                alpha_best,lamda_best,beta_best=0.02,0,0
+                win_best,fg_best =0,0
+                #print(prev_params_item,len(prev_params_item))
+                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1:
+                    prev_alpha = prev_params_item["alpha"].values[0]
+                    prev_lamda = prev_params_item["lamda"].values[0]
+                    prev_beta = prev_params_item["beta"].values[0]
+                    prev_gamma = prev_params_item["gamma"].values[0]
+                    best_score = prev_params_item["best_score_wape"].values[0]
+                    alpha_best,lamda_best,beta_best,gamma_best = prev_alpha,prev_lamda,prev_beta,prev_gamma
+                    if prev_params_item["best_score_wape"].values[0] < 0.1:
+                        #x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
+                        x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                        
+                    else:
+                        #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                        x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                        
+                else:
+                    x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                print("x0:",x0,",bounds:",bounds,best_score)
+                for ma_win in MA_WINDOWS:
+                    for fg in FORGET_FACTORS:
+                        forget_factor = fg
 
+                        for win in WINDOWS:
+                            WINDOW = win
+                            #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                            #actual = savgol_filter(actual_all, ma_win, 2)
+                            #x0 = [0.05,np.max(actual),200]
+                            #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
+                            #for j in range(3):
+                            #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                            #bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
+                            res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
+                            alpha,lamda,beta,gamma = res.x
+                            current_score = cost_actual([alpha,lamda,beta,gamma])
+                            #print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                            if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
+                                best_score = current_score
+                                alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
+                                win_best,fg_best = win,fg
+                
+                print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score)
+
+            
+
+                model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,gamma_best,best_score])
+                #end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best))
+                #end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
+            
+                predictions = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best,gamma_best)
+            else:
+                x = np.arange(0,365+window_for_averaging,1)
+                predictions = np.cumsum(func(x,A_,gr))
+                best_score = cost_actual([A_,gr],"exp")
+                model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),gr,A_,-1,-1,best_score])
+                print(date_to_pred,country,"A_:",A_,"gr:",gr,"best_score(exp)=",best_score)
+
+            PREDICTIONS.append(predictions)
             PREDICTIONS = np.array(PREDICTIONS)
             pred_mean,pred_up,pred_lower = conf_interval(PREDICTIONS)
             
+
+
+
             # Error correction for total cases
             error_total_cases = df_cases[(df_cases["Country/Region"]==country)&(df_cases["country_of_state"]==country_of_state)]["confirmed"].tail(1).values[0] - pred_mean[window_for_averaging]
             pred_mean = pred_mean + error_total_cases
@@ -687,14 +720,19 @@ if len(dates_to_pred) > 0:
             predicted_cases_countries = pd.concat((predicted_cases_countries,predictions),axis=0)
 
             if country in TD_regions:
+                best_scores_all.append(best_score)
                 p = predictions
                 a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}' and date <= '{}'".format(country_of_state,max_date_cases))
                 #print("---------a ",a,len(a))
                 fig = plt.figure(figsize=[10,5])
                 param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
-                plt.title("Cases {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
+                plt.title("Cases {},{},{} \nA={:.4f},gr={:.4f}\nx0={}\nbounds={}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str,
+                                                                                                                           A_,gr,
+                                                                                                                           ",".join(['{:.4f}'.format(x) for x in x0]),
+                                                                                                                           str(bounds)))
                 plt.plot(pd.to_datetime(p["date"]),p["pred_confirmed_cases"].diff())
                 plt.plot(a["date"],[0]+list(np.diff(actual_all)))
+                plt.subplots_adjust(top=0.8)
                 pp.savefig(fig)
                 #plt.show()
                 plt.close()
@@ -716,6 +754,25 @@ else:
 if len(model_params) > 0:
     model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","gamma","best_score_wape"])
     copy_to_sql(df=model_params,table_name="LG_predicted_cases_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
+    ### save the scores in terms of a histogram and a cdf
+    best_scores_all_dict[PEAK_WIN] = best_scores_all
+    print("Overrall average WAPE (TD sites):",np.average(best_scores_all))
+    _hist,_bin = np.histogram(best_scores_all,bins= np.linspace(0,1.0,21))
+    fig = plt.figure()
+    plt.title("Avg WAPE ={:.4f}".format(np.average(best_scores_all)))
+    plt.plot((100*_bin[1:]).astype(int),np.cumsum(_hist)/np.sum(_hist))
+    plt.xlabel("WAPE (%)")
+    plt.ylabel("CDF")
+    pp.savefig(fig)
+    plt.close()
+
+    fig = plt.figure()
+    plt.title("Avg WAPE ={:.4f}".format(np.average(best_scores_all)))
+    sns.barplot((100*_bin[1:]).astype(int),_hist)
+    plt.xlabel("WAPE (%)")
+    plt.ylabel("count")
+    pp.savefig(fig)
+    plt.close()
 
 try:
     remove_context()
@@ -726,6 +783,8 @@ except Exception as e:
 PRED_CASES_COUNTRIES["date"] = pd.to_datetime(PRED_CASES_COUNTRIES["date"])
 PRED_CASES_COUNTRIES["date_of_calc"] = pd.to_datetime(PRED_CASES_COUNTRIES["date_of_calc"])
 PRED_CASES_COUNTRIES
+
+
 
 
 # calculate predictions with confidence
@@ -794,7 +853,8 @@ print(dates_to_pred)
 
 
 model_params = []
-
+best_scores_all_d = []
+best_scores_all_d_dict = {}
 #dates_to_pred= pd.date_range(start='2020-10-17', end = '2020-11-29')
 if len(dates_to_pred)>0:
     prev_params = get_sql_df("""select * from 
@@ -827,50 +887,81 @@ if len(dates_to_pred)>0:
             #actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].rolling(window=14).mean().values)
             actual = copy.copy(actual_all)
 
+            D=df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].rolling(window=14).mean()
+            WINDOW_RISK = 14
+            PREDICTIONS = []
+            ROLLING_MEAN_FOR_GROWTH_CALC = 0
+            gr_d,A_d = get_growth_rate(D,1000,0.001)
+
             # for setting the max bound for deaths based on case predictions
             cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
             mortality_rate = actual_all[-1]/cases[-1]
             pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
-            bounds = Bounds([min_bound_alpha, 0,min_bound_beta,min_bound_gamma], [max_bound_alpha, mortality_rate*pred_cases[-1] - actual_all[-1] ,max_bound_beta,max_bound_gamma])#np.max(actual)/max_infected
-            #
+            bounds = Bounds([min_bound_alpha, 0,min_bound_beta,min_bound_gamma], [max_bound_alpha, mortality_rate*(pred_cases[-1] - pred_cases[window_for_averaging])  ,max_bound_beta+15,max_bound_gamma])#np.max(actual)/max_infected
+            #- actual_all[-1]
+
+            print("growth_deaths",gr_d)
             
             PREDICTIONS_DEATHS = []
-            best_score = np.inf
-            alpha_best,lamda_best,beta_best=0.02,0,0
-            win_best,fg_best =0,0
 
-            if len(prev_params_item)>0 and prev_params_item["best_score_wape"].values[0] < 1.0:
-                x0 = [ prev_params_item["alpha"].values[0], prev_params_item["lamda"].values[0], prev_params_item["beta"].values[0],prev_params_item["gamma"].values[0] ]
-            else:
-                x0 = [0.05,np.max(actual),200,1]
-            
-            for ma_win in MA_WINDOWS:
-                for fg in FORGET_FACTORS:
-                    forget_factor = fg
+            if gr_d > -0.008:
+                best_score = np.inf
+                alpha_best,lamda_best,beta_best=0.02,0,0
+                win_best,fg_best =0,0
 
-                    for win in WINDOWS:
-                        WINDOW = win
-                        #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
-                        #actual = savgol_filter(actual_all, ma_win, 2)
-                        #x0 = [0.05,actual_all[-1],200]
-                        #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
-                        #for j in range(3):
-                        #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
-                        res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")
-                        alpha,lamda,beta,gamma = res.x
-                        current_score = cost_actual([alpha,lamda,beta,gamma])
-                        #print(ma_win,win,fg,alpha,lamda,beta,current_score)
-                        if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
-                            best_score = current_score
-                            alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
-                            win_best,fg_best = win,fg
+                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1:
+                    prev_alpha = prev_params_item["alpha"].values[0]
+                    prev_lamda = prev_params_item["lamda"].values[0]
+                    prev_beta = prev_params_item["beta"].values[0]
+                    prev_gamma = prev_params_item["gamma"].values[0]
+                    best_score = prev_params_item["best_score_wape"].values[0]
+                    alpha_best,lamda_best,beta_best,gamma_best = prev_alpha,prev_lamda,prev_beta,prev_gamma
+                    if prev_params_item["best_score_wape"].values[0] < 0.1 and prev_params_item["best_score_wape"].values[0] > 0:
+                        x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
+                    else:
+                        #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                        x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         
-            print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score) 
-            model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,gamma_best,best_score])
+                else:
+                    #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                    x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                        
+                print("x0:",x0,",bounds:",bounds,best_score)
+                
+                for ma_win in MA_WINDOWS:
+                    for fg in FORGET_FACTORS:
+                        forget_factor = fg
 
-            end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best,gamma_best))
-            end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
-            predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best,gamma_best)
+                        for win in WINDOWS:
+                            WINDOW = win
+                            #actual = pd.Series(actual_all).rolling(window=ma_win).mean()#[0:i]
+                            #actual = savgol_filter(actual_all, ma_win, 2)
+                            #x0 = [0.05,actual_all[-1],200]
+                            #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
+                            #for j in range(3):
+                            #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                            res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")
+                            alpha,lamda,beta,gamma = res.x
+                            current_score = cost_actual([alpha,lamda,beta,gamma])
+                            #print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                            if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
+                                best_score = current_score
+                                alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
+                                win_best,fg_best = win,fg
+                            
+                print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score) 
+                model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,gamma_best,best_score])
+
+                end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best,gamma_best))
+                end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
+                predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best,gamma_best)
+            else:
+                x = np.arange(0,365+window_for_averaging,1)
+                predictions_deaths = np.cumsum(func(x,A_d,gr_d))
+                best_score = cost_actual([A_d,gr_d],"exp")
+                model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),gr_d,A_d,-1,-1,best_score])
+                print(date_to_pred,country,"A_d:",A_d,"gr_d:",gr_d,"best_score(exp)=",best_score)
+
             PREDICTIONS_DEATHS.append(predictions_deaths)
                     
             PREDICTIONS_DEATHS = np.array(PREDICTIONS_DEATHS)
@@ -910,13 +1001,20 @@ if len(dates_to_pred)>0:
 
             
             if country in TD_regions:
+                best_scores_all_d.append(best_score)
                 p = predictions_deaths
                 a = df_cases[df_cases["Country/Region"] ==country].query("country_of_state == '{}' and date <= '{}'".format(country_of_state,max_date_cases))
+                plt.plot(p["pred_deaths"])
                 fig = plt.figure(figsize=[10,5])
                 param_str = "w={},f={},a={:.4f},l={:.4f},b={:.4f}".format(win_best,fg_best,alpha_best,lamda_best,beta_best)
-                plt.title("Deaths {},{},{}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str))
+                plt.title("Deaths {},{},{} \nA={:.4f},gr={:.4f},mort_cur={:.4f},mort_pred={:.4f}\nx0={}\nbounds={}".format(country,date_to_pred.strftime("%Y-%m-%d"),param_str,
+                                                                                                                           A_d,gr_d,
+                                                                                                                           mortality_rate,pred_mean[-1]/pred_cases[-1],
+                                                                                                                           ",".join(['{:.4f}'.format(x) for x in x0]),
+                                                                                                                           str(bounds)))
                 plt.plot(pd.to_datetime(p["date"]),p["pred_deaths"].diff())
                 plt.plot(a["date"],[0]+list(np.diff(actual_all)))
+                plt.subplots_adjust(top=0.8)
                 pp.savefig(fig)
                 plt.close()
                 #plt.show()
@@ -934,6 +1032,22 @@ else:
 if len(model_params) > 0:
     model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","gamma","best_score_wape"])
     copy_to_sql(df=model_params,table_name="LG_predicted_deaths_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
+    print("Overrall average WAPE (TD sites) [DEATHS]:",np.average(best_scores_all))
+    fig = plt.figure()
+    plt.title("Avg WAPE ={:.4f}".format(np.average(best_scores_all_d)))
+    plt.plot((100*_bin[1:]).astype(int),np.cumsum(_hist)/np.sum(_hist))
+    plt.xlabel("WAPE (%)")
+    plt.ylabel("CDF")
+    pp.savefig(fig)
+    plt.close()
+
+    fig = plt.figure()
+    plt.title("Avg WAPE ={:.4f}".format(np.average(best_scores_all_d)))
+    sns.barplot((100*_bin[1:]).astype(int),_hist)
+    plt.xlabel("WAPE (%)")
+    plt.ylabel("count")
+    pp.savefig(fig)
+    plt.close()
 
 remove_context()
 
@@ -1574,13 +1688,13 @@ if max_date_phase_tab != MAX_DATE_CASES.strftime("%Y-%m-%d"):
     ,1  - ( (2.0 / (1 + EXP(-alpha_vacc_sql*pred_vacc_perc))) - 1.0) as risk_factor_vacc_sql
 
 
-    ,(4*risk_factor_cases_sql+
-    1*risk_factor_cases_sql*risk_factor_growth_rate_sql + 
-    4*risk_factor_deaths_sql+
-    1*risk_factor_deaths_sql*risk_factor_growth_rate_deaths_sql + 
-    1*risk_factor_cases_sql*risk_factor_Re_sql +
-    4*risk_factor_vacc_sql)/
-    (4+1+4+1+1+4) as risk
+    ,(1*risk_factor_cases_sql+
+    0*risk_factor_cases_sql*risk_factor_growth_rate_sql + 
+    1*risk_factor_deaths_sql+
+    0*risk_factor_deaths_sql*risk_factor_growth_rate_deaths_sql + 
+    0*risk_factor_cases_sql*risk_factor_Re_sql +
+    3*risk_factor_vacc_sql)/
+    (1+0+1+0+0+3) as risk
 
     from rto.regional_intensity_pred_with_vacc_view
 
