@@ -423,23 +423,36 @@ def cost_predictions(params):
 
 def cost_actual(params,model_type = 'LG'):
     actual2= np.diff(actual)
+    actual2[actual2<0]=0
     assert model_type == 'LG' or model_type == 'exp'
     win_actual = window_for_averaging#2*window_for_averaging
-    den = np.abs(float(np.average(actual2[-win_actual:])))
+    den = float(np.average(actual2[-win_actual:]))
     
 
-    if den == 0:
-        return 0
+    
     if model_type == 'LG':
+        win_actual = window_for_averaging#2*window_for_averaging
         y = get_predictions_sigmoid(np.arange(0,len(actual)+365,1),params[0],params[1],params[2],params[3])
         y = np.diff(y)        
-        
-        return mean_absolute_error(y[len(actual)-win_actual:len(actual)],actual2[-win_actual:]) / den
+        if den == 0:
+            err = mean_absolute_error(y[len(actual)-win_actual:len(actual)],actual2[-win_actual:])
+            if err > 1:
+                return 1.0
+            else:
+                return err
+        else:
+            return mean_absolute_error(y[len(actual)-win_actual:len(actual)],actual2[-win_actual:]) / den
     elif model_type == 'exp': 
         x = np.arange(0,365+window_for_averaging,1)
         y = func(x,params[0],params[1])
-
-        return mean_absolute_error(y[0:win_actual],actual2[-win_actual:]) / den
+        if den == 0:
+            err = mean_absolute_error(y[0:win_actual],actual2[-win_actual:])
+            if err > 1:
+                return 1.0
+            else:
+                return err
+        else:
+            return mean_absolute_error(y[0:win_actual],actual2[-win_actual:]) / den
 
     
 
