@@ -588,7 +588,7 @@ PEAK_WIN = 30
 max_bound_beta = CURRENT_DAY_SINCE_START + PEAK_WIN#1000
 max_bound_alpha = 0.1
 min_bound_alpha = 0.01
-min_bound_beta = CURRENT_DAY_SINCE_START - 15#300 #200
+min_bound_beta = CURRENT_DAY_SINCE_START #300 #200
 min_bound_gamma = 1.0
 max_bound_gamma = 1.0
 WINDOWS = [60]#np.arange(30,60)
@@ -647,6 +647,10 @@ if len(dates_to_pred) > 0:
                 suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + 1.3*vacc_perc*population) )
                 #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
                 #np.max(actual)/max_infected
+                if gr < 0:
+                    min_bound_beta = CURRENT_DAY_SINCE_START -15
+                else:
+                    min_bound_beta = CURRENT_DAY_SINCE_START 
                 bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
 
                     
