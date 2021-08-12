@@ -305,7 +305,7 @@ if max_date_cases_tab>=max_date_region_int_tab:
     REGIONS = pd.DataFrame([],columns=['Country/Region', 'country_of_state', 'population', 'date', 'is_TD',
            'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
            'total_cases_per_M', 'daily_cases', 'daily_cases_per_M', 'daily_deaths',
-           'daily_deaths_per_M'])
+           'daily_deaths_per_M'],dtype=object)
 
 
     # to remove any partially calculated values
@@ -559,8 +559,8 @@ CURRENT_DAY_SINCE_START = (MAX_DATE_CASES - dates[0].date()).days
 
 dates_to_pred,max_date_previous = get_dates_to_pred("LG_predicted_cases")
 
-END_DATES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
-PRED_CASES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
+END_DATES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"],dtype=object)
+PRED_CASES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"],dtype=object)
 
 regions = df_cases[["Country/Region","country_of_state","population","vacc_perc","avg_mob"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
 
@@ -605,7 +605,7 @@ if len(dates_to_pred) > 0:
         #max_date_cases = df_cases["date"].values[-1]
         #print(max_date_cases)
         end_dates_countries = []
-        predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"])
+        predicted_cases_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"],dtype=object)
         
             
         #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
@@ -841,7 +841,7 @@ print("Calculating Predictions (DEATHS)")
 
 window_for_averaging = 15#14
 
-PRED_DEATHS_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
+PRED_DEATHS_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"],dtype=object)
 
 regions = df_cases[["Country/Region","country_of_state","population"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
 
@@ -871,7 +871,7 @@ if len(dates_to_pred)>0:
         #max_date_cases = df_cases["date"].values[-1]
         print(max_date_cases)
         end_dates_countries = []
-        predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"])
+        predicted_deaths_countries = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_deaths"],dtype=object)
         #WINDOWS = [60]#np.arange(30,60)
         #FORGET_FACTORS=[0.99,0.9,0.85]#[0.9,0.95,0.99]
         #MA_WINDOWS = [3,5]#7,15]#[2,7,14]
@@ -1174,7 +1174,7 @@ ROLLING_MEAN_FOR_GROWTH_CALC = 0
 REGIONS = pd.DataFrame([],columns=['Country/Region', 'country_of_state', 'population', 'date', 'is_TD',
        'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
        'total_cases_per_M', 'daily_cases', 'daily_cases_per_M', 'daily_deaths',
-       'daily_deaths_per_M'])
+       'daily_deaths_per_M'],dtype=object)
 for date_to_calc in dates_to_calc:
     total_cases = []
     daily_cases = []
@@ -1417,7 +1417,7 @@ if max_date_risk_pred_tab != MAX_DATE_CASES.strftime("%Y-%m-%d"):
     REGIONS = pd.DataFrame([],columns=['Country/Region', 'country_of_state', 'population', 'date', 'is_TD',
            'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
            'total_cases_per_M', 'daily_cases', 'daily_cases_per_M', 'daily_deaths',
-           'daily_deaths_per_M'])
+           'daily_deaths_per_M'],dtype=object)
 
     error_forget_factor = 0.99
     power_error_factor = 0
@@ -1616,7 +1616,7 @@ if max_date_risk_pred_tab != MAX_DATE_CASES.strftime("%Y-%m-%d"):
     REGIONS_NEW = pd.DataFrame([],columns=['Country/Region', 'country_of_state', 'population', 'date', 'is_TD',
            'growth_rate', 'growth_rate_deaths', 'Re', 'total_cases',
            'total_cases_per_M', 'daily_cases', 'daily_cases_per_M', 'daily_deaths',
-           'daily_deaths_per_M'])
+           'daily_deaths_per_M'],dtype=object)
     for row in regions[["Country/Region","country_of_state","population"]].values:
         region,country_of_state,pop = row
         #print(region,country_of_state)
@@ -1829,7 +1829,7 @@ cnt_future_days = 366 # +1 for current date
 
 df_vacc["date_vacc"] = pd.to_datetime(df_vacc["date_vacc"])
 
-df_vacc_pred = pd.DataFrame([],columns=["city","country_region","country_of_state","date_of_calc","date_pred","pred_vacc_perc"])
+df_vacc_pred = pd.DataFrame([],columns=["city","country_region","country_of_state","date_of_calc","date_pred","pred_vacc_perc"],dtype=object)
 for city,country_region,country_of_state,max_date_calc in df_vacc[["city","country_region","country_of_state","max_date_calc"]].drop_duplicates().sort_values("city").values:
     # 
     
@@ -1909,7 +1909,7 @@ for city,country_region,country_of_state,max_date_calc in df_vacc[["city","count
     print(start_pred_date)'''
     
     
-    df_v_p_tmp = pd.DataFrame([],columns=["city","country_region","country_of_state","date_of_calc","date_pred","pred_vacc_perc"])
+    df_v_p_tmp = pd.DataFrame([],columns=["city","country_region","country_of_state","date_of_calc","date_pred","pred_vacc_perc"],dtype=object)
     
     
     df_v_p_tmp["pred_vacc_perc"] = future_vacc_predictions.flatten()
