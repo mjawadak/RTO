@@ -651,8 +651,7 @@ if len(dates_to_pred) > 0:
                     min_bound_beta = CURRENT_DAY_SINCE_START -15
                 else:
                     min_bound_beta = CURRENT_DAY_SINCE_START 
-                bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
-
+                
                     
                 
                 best_score = np.inf
@@ -675,7 +674,11 @@ if len(dates_to_pred) > 0:
                         x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         
                 else:
-                    x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                    #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                    x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                        
+                bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
+
                 print("x0:",x0,",bounds:",bounds,best_score)
                 for ma_win in MA_WINDOWS:
                     for fg in FORGET_FACTORS:
@@ -689,7 +692,6 @@ if len(dates_to_pred) > 0:
                             #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
                             #for j in range(3):
                             #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
-                            #bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
                             res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
                             alpha,lamda,beta,gamma = res.x
                             current_score = cost_actual([alpha,lamda,beta,gamma])
@@ -914,7 +916,6 @@ if len(dates_to_pred)>0:
             cases = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
             mortality_rate = actual_all[-1]/cases[-1]
             pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
-            bounds = Bounds([min_bound_alpha, 0,min_bound_beta,min_bound_gamma], [max_bound_alpha, mortality_rate*(pred_cases[-1] - pred_cases[window_for_averaging])  ,max_bound_beta+15,max_bound_gamma])#np.max(actual)/max_infected
             #- actual_all[-1]
 
             print("growth_deaths",gr_d)
@@ -925,6 +926,11 @@ if len(dates_to_pred)>0:
                 best_score = np.inf
                 alpha_best,lamda_best,beta_best=0.02,0,0
                 win_best,fg_best =0,0
+
+                if gr < 0:
+                    min_bound_beta = CURRENT_DAY_SINCE_START -15
+                else:
+                    min_bound_beta = CURRENT_DAY_SINCE_START 
 
                 if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0:
                     prev_alpha = prev_params_item["alpha"].values[0]
@@ -942,7 +948,9 @@ if len(dates_to_pred)>0:
                 else:
                     #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
                     x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
-                        
+                
+                bounds = Bounds([min_bound_alpha, min_bound_alpha,min_bound_beta,min_bound_gamma], [max_bound_alpha, mortality_rate*(pred_cases[-1] - pred_cases[window_for_averaging])  ,max_bound_beta+15,max_bound_gamma])#np.max(actual)/max_infected
+                
                 print("x0:",x0,",bounds:",bounds,best_score)
                 
                 for ma_win in MA_WINDOWS:
