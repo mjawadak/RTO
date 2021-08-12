@@ -628,7 +628,7 @@ if len(dates_to_pred) > 0:
             prev_params_item = prev_params[prev_params["Country/Region"]==country].query("country_of_state == '{}'".format(country_of_state))
 
             #actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
-            actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].rolling(window=14).mean().values)
+            actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"]  
             #print("---------actual_all",actual_all,len(actual_all))
             actual = copy.copy(actual_all)#[0:i]
             if vacc_perc > 1:
@@ -648,9 +648,9 @@ if len(dates_to_pred) > 0:
                 #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
                 #np.max(actual)/max_infected
                 if gr < 0:
-                    min_bound_beta = CURRENT_DAY_SINCE_START -15
+                    min_bound_beta = CURRENT_DAY_SINCE_START - 15
                 else:
-                    min_bound_beta = CURRENT_DAY_SINCE_START 
+                    min_bound_beta = CURRENT_DAY_SINCE_START + 7
                 
                     
                 
@@ -666,8 +666,8 @@ if len(dates_to_pred) > 0:
                     best_score = prev_params_item["best_score_wape"].values[0]
                     alpha_best,lamda_best,beta_best,gamma_best = prev_alpha,prev_lamda,prev_beta,prev_gamma
                     if prev_params_item["best_score_wape"].values[0] < 0.1 and prev_params_item["best_score_wape"].values[0] > 0:
-                        #x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
-                        x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                        x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
+                        #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         
                     else:
                         #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
@@ -928,9 +928,9 @@ if len(dates_to_pred)>0:
                 win_best,fg_best =0,0
 
                 if gr < 0:
-                    min_bound_beta = CURRENT_DAY_SINCE_START -15
+                    min_bound_beta = CURRENT_DAY_SINCE_START - 15
                 else:
-                    min_bound_beta = CURRENT_DAY_SINCE_START 
+                    min_bound_beta = CURRENT_DAY_SINCE_START + 7
 
                 if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0:
                     prev_alpha = prev_params_item["alpha"].values[0]
