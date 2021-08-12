@@ -425,7 +425,7 @@ def cost_actual(params,model_type = 'LG'):
     actual2= np.diff(actual)
     assert model_type == 'LG' or model_type == 'exp'
     win_actual = window_for_averaging#2*window_for_averaging
-    den = float(np.average(actual2[-win_actual:]))
+    den = np.abs(float(np.average(actual2[-win_actual:])))
     
 
     if den == 0:
@@ -642,14 +642,14 @@ if len(dates_to_pred) > 0:
                 alpha_best,lamda_best,beta_best=0.02,0,0
                 win_best,fg_best =0,0
                 #print(prev_params_item,len(prev_params_item))
-                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1:
+                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0:
                     prev_alpha = prev_params_item["alpha"].values[0]
                     prev_lamda = prev_params_item["lamda"].values[0]
                     prev_beta = prev_params_item["beta"].values[0]
                     prev_gamma = prev_params_item["gamma"].values[0]
                     best_score = prev_params_item["best_score_wape"].values[0]
                     alpha_best,lamda_best,beta_best,gamma_best = prev_alpha,prev_lamda,prev_beta,prev_gamma
-                    if prev_params_item["best_score_wape"].values[0] < 0.1:
+                    if prev_params_item["best_score_wape"].values[0] < 0.1 and prev_params_item["best_score_wape"].values[0] > 0:
                         #x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
                         x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         
@@ -909,7 +909,7 @@ if len(dates_to_pred)>0:
                 alpha_best,lamda_best,beta_best=0.02,0,0
                 win_best,fg_best =0,0
 
-                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1:
+                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0:
                     prev_alpha = prev_params_item["alpha"].values[0]
                     prev_lamda = prev_params_item["lamda"].values[0]
                     prev_beta = prev_params_item["beta"].values[0]
@@ -1835,7 +1835,7 @@ for city,country_region,country_of_state,max_date_calc in df_vacc[["city","count
     
     df_vacc.loc[df_vacc.query("city == '{}'".format(city)).index,"people_vacc_percent"] = df_vacc.query("city == '{}'".format(city))["people_vacc_percent"].fillna(method='ffill').values#.plot()
     dates_vacc = df_vacc.query("city == '{}'".format(city))["date_vacc"]
-    days = dates_vacc.sub(pd.datetime.datetime.strptime("2020-01-01","%Y-%m-%d")).dt.days
+    days = dates_vacc.sub(datetime.datetime.strptime("2020-01-01","%Y-%m-%d")).dt.days
     date_of_calc = dates_vacc.iloc[-1].strftime("%Y-%m-%d")
     print(date_of_calc)
     train_data = df_vacc.query("city == '{}'".format(city))["people_vacc_percent"].values#.cumsum().values
