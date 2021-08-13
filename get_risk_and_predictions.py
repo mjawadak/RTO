@@ -592,6 +592,7 @@ min_bound_alpha = 0.01
 min_bound_beta = CURRENT_DAY_SINCE_START #300 #200
 min_bound_gamma = 1.0
 max_bound_gamma = 1.0
+min_bound_lambda = 0
 WINDOWS = [60]#np.arange(30,60)
 FORGET_FACTORS=[0.99,0.9,0.85,0.8]#[0.9,0.95,0.99]#0.999,
 MA_WINDOWS = [-1]#[3,7,15]#[2,7,14]
@@ -680,7 +681,7 @@ if len(dates_to_pred) > 0:
                     random_runs = 3
                     x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         
-                bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
+                bounds = Bounds([min_bound_alpha,min_bound_lambda,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
 
                 print("x0:",x0,",bounds:",bounds,best_score)
                 for ma_win in MA_WINDOWS:
@@ -957,7 +958,7 @@ if len(dates_to_pred)>0:
                     random_runs = 3
                     x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                 
-                bounds = Bounds([min_bound_alpha, min_bound_alpha,min_bound_beta,min_bound_gamma], [max_bound_alpha, mortality_rate*(pred_cases[-1] - pred_cases[window_for_averaging])  ,max_bound_beta+15,max_bound_gamma])#np.max(actual)/max_infected
+                bounds = Bounds([min_bound_alpha, min_bound_lambda,min_bound_beta,min_bound_gamma], [max_bound_alpha, mortality_rate*(pred_cases[-1] - pred_cases[window_for_averaging])  ,max_bound_beta+15,max_bound_gamma])#np.max(actual)/max_infected
                 
                 print("x0:",x0,",bounds:",bounds,best_score)
                 
@@ -1066,7 +1067,8 @@ else:
 if len(model_params) > 0:
     model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","gamma","best_score_wape"])
     copy_to_sql(df=model_params,table_name="LG_predicted_deaths_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
-    print("Overrall average WAPE (TD sites) [DEATHS]:",np.average(best_scores_all))
+    print("Overrall average WAPE (TD sites) [DEATHS]:",np.average(best_scores_all_d))
+    _hist,_bin = np.histogram(best_scores_all_d,bins= np.linspace(0,1.0,21))
     fig = plt.figure()
     plt.title("Avg WAPE ={:.4f}".format(np.average(best_scores_all_d)))
     plt.plot((100*_bin[1:]).astype(int),np.cumsum(_hist)/np.sum(_hist))
