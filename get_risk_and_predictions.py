@@ -409,6 +409,7 @@ def get_predictions_sigmoid_exp(t, A, lamda): # y = A*exp(lambda*t)
     y = A*np.exp(lamda*t)
     return y
 def cost_predictions(params):
+    global actual,WINDOW
     y = get_predictions_sigmoid(np.arange(0,len(actual),1),params[0],params[1],params[2],params[3])
     
     # in case fitting on diff is required
@@ -422,6 +423,7 @@ def cost_predictions(params):
     return np.sum(f[-WINDOW:]*(y[-WINDOW:] - actual2[-WINDOW:])**2)
 
 def cost_actual(params,model_type = 'LG'):
+    global actual,window_for_averaging
     actual2= np.diff(actual)
     actual2[actual2<0]=0
     assert model_type == 'LG' or model_type == 'exp'
@@ -572,7 +574,7 @@ CURRENT_DAY_SINCE_START = (MAX_DATE_CASES - dates[0].date()).days
 
 dates_to_pred,max_date_previous = get_dates_to_pred("LG_predicted_cases")
 
-END_DATES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"],dtype=object)
+#END_DATES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"],dtype=object)
 PRED_CASES_COUNTRIES = pd.DataFrame([],columns=["Country/Region","country_of_state","date_of_calc","date","pred_confirmed_cases"],dtype=object)
 
 regions = df_cases[["Country/Region","country_of_state","population","vacc_perc","avg_mob"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
@@ -583,16 +585,23 @@ regions = df_cases[["Country/Region","country_of_state","population","vacc_perc"
 #sql_command = """delete from rto.LG_predicted_cases where date_of_calc ='{}';""".format((max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"))
 #print(sql_command)
 
+
+def init_params():
+    global PEAK_WIN,max_bound_beta,max_bound_alpha,min_bound_alpha,min_bound_beta,min_bound_gamma,max_bound_gamma,min_bound_lambda
+    PEAK_WIN = 30
+    max_bound_beta = CURRENT_DAY_SINCE_START + PEAK_WIN#1000
+    max_bound_alpha = 0.1
+    min_bound_alpha = 0.01
+    min_bound_beta = 200#CURRENT_DAY_SINCE_START #300 #200
+    min_bound_gamma = 1.0
+    max_bound_gamma = 1.0
+    min_bound_lambda = 0
+
+init_params()
+
 model_params = []
 random_runs = 1
-PEAK_WIN = 30
-max_bound_beta = CURRENT_DAY_SINCE_START + PEAK_WIN#1000
-max_bound_alpha = 0.1
-min_bound_alpha = 0.01
-min_bound_beta = CURRENT_DAY_SINCE_START #300 #200
-min_bound_gamma = 1.0
-max_bound_gamma = 1.0
-min_bound_lambda = 0
+
 WINDOWS = [60]#np.arange(30,60)
 FORGET_FACTORS=[0.99,0.9,0.85,0.8]#[0.9,0.95,0.99]#0.999,
 MA_WINDOWS = [-1]#[3,7,15]#[2,7,14]
@@ -616,6 +625,7 @@ if len(dates_to_pred) > 0:
 
 
     for date_to_pred in dates_to_pred:
+
         max_date_cases = date_to_pred.strftime("%Y-%m-%d")
         #max_date_cases = df_cases["date"].values[-1]
         #print(max_date_cases)
@@ -626,6 +636,7 @@ if len(dates_to_pred) > 0:
         #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
         #regions = regions[regions["Country/Region"]  == 'Pune']
         for country,country_of_state,population,vacc_perc,avg_mob in regions.values:
+            init_params()
             #sprint(date_to_pred,country,"_",vacc_perc)
             prev_params_item = prev_params[prev_params["Country/Region"]==country].query("country_of_state == '{}'".format(country_of_state))
 
@@ -641,9 +652,12 @@ if len(dates_to_pred) > 0:
             PREDICTIONS = []
             ROLLING_MEAN_FOR_GROWTH_CALC = 0
             gr,A_ = get_growth_rate(D,1000,0.001)
-            print("growth",gr)
+            
             delta_days = CURRENT_DAY_SINCE_START - len(actual) + 1
+
             max_bound_beta = max_bound_beta - delta_days
+            #min_bound_beta = CURRENT_DAY_SINCE_START - delta_days
+            print("growth",gr,delta_days,CURRENT_DAY_SINCE_START,min_bound_beta,max_bound_beta)
             if gr > -0.008:
                 unknown_immune_pop = get_unknown_immune_pop(avg_mob)
             
@@ -651,11 +665,11 @@ if len(dates_to_pred) > 0:
                 suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + 1.3*vacc_perc*population) )
                 #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
                 #np.max(actual)/max_infected
-                if gr < 0:
-                    min_bound_beta = CURRENT_DAY_SINCE_START - 60 - delta_days
+                '''if gr < 0:
+                    min_bound_beta = CURRENT_DAY_SINCE_START - 60 
                    
                 else:
-                    min_bound_beta = CURRENT_DAY_SINCE_START + 7 - delta_days
+                    min_bound_beta = CURRENT_DAY_SINCE_START + 7'''
                     
                 
                     
@@ -764,10 +778,10 @@ if len(dates_to_pred) > 0:
                 #plt.show()
                 plt.close()
 
-        end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
+        #end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
         
         PRED_CASES_COUNTRIES = pd.concat((PRED_CASES_COUNTRIES,predicted_cases_countries),axis=0)
-        END_DATES_COUNTRIES = pd.concat((END_DATES_COUNTRIES,end_dates_countries),axis=0)
+        #END_DATES_COUNTRIES = pd.concat((END_DATES_COUNTRIES,end_dates_countries),axis=0)
         
         
         #copy_to_sql(df=end_date_all,table_name="LG_predicted_end_dates",schema_name="rto",if_exists="append",primary_index="Country/Region")
@@ -907,6 +921,7 @@ if len(dates_to_pred)>0:
         #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
         for country,country_of_state,population in regions.values:
             print(date_to_pred,country)
+            init_params()
             prev_params_item = prev_params[prev_params["Country/Region"]==country].query("country_of_state == '{}'".format(country_of_state))
 
             #actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["deaths"].values
@@ -930,6 +945,7 @@ if len(dates_to_pred)>0:
             
             delta_days = CURRENT_DAY_SINCE_START - len(actual) + 1
             max_bound_beta = max_bound_beta - delta_days
+            #min_bound_beta = CURRENT_DAY_SINCE_START - delta_days
 
             PREDICTIONS_DEATHS = []
             print("growth_deaths",gr_d,delta_days,CURRENT_DAY_SINCE_START,min_bound_beta,max_bound_beta)
@@ -938,10 +954,10 @@ if len(dates_to_pred)>0:
                 alpha_best,lamda_best,beta_best=0.02,0,0
                 win_best,fg_best =0,0
 
-                if gr_d < 0:
-                    min_bound_beta = CURRENT_DAY_SINCE_START - 60 - delta_days
+                '''if gr_d < 0:
+                    min_bound_beta = CURRENT_DAY_SINCE_START - 60
                 else:
-                    min_bound_beta = CURRENT_DAY_SINCE_START + 7 - delta_days
+                    min_bound_beta = CURRENT_DAY_SINCE_START + 7'''
 
                 if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
                     prev_alpha = prev_params_item["alpha"].values[0]
@@ -983,7 +999,7 @@ if len(dates_to_pred)>0:
                                 res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")
                                 alpha,lamda,beta,gamma = res.x
                                 current_score = cost_actual([alpha,lamda,beta,gamma])
-                                #print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                                print(ma_win,win,fg,alpha,lamda,beta,gamma,current_score)
                                 if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
                                     best_score = current_score
                                     alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
@@ -992,8 +1008,8 @@ if len(dates_to_pred)>0:
                 print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score) 
                 model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,gamma_best,best_score])
 
-                end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best,gamma_best))
-                end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
+                #end_date = get_end_date(get_predictions_sigmoid(np.arange(0,len(dates),1),alpha_best,lamda_best,beta_best,gamma_best))
+                #end_dates_countries.append([country,"",max_date_cases,end_date[0],end_date[1]])
                 predictions_deaths = get_predictions_sigmoid(np.arange(0,len(actual)+365,1)[len(actual)-window_for_averaging:],alpha_best,lamda_best,beta_best,gamma_best)
             else:
                 x = np.arange(0,365+window_for_averaging,1)
@@ -1059,7 +1075,7 @@ if len(dates_to_pred)>0:
                 plt.close()
                 #plt.show()
 
-        end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
+        #end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
         
         PRED_DEATHS_COUNTRIES = pd.concat((PRED_DEATHS_COUNTRIES,predicted_deaths_countries),axis=0)
             
