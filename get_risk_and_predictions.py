@@ -643,6 +643,7 @@ if len(dates_to_pred) > 0:
             gr,A_ = get_growth_rate(D,1000,0.001)
             print("growth",gr)
             delta_days = CURRENT_DAY_SINCE_START - len(actual) + 1
+            max_bound_beta = max_bound_beta - delta_days
             if gr > -0.008:
                 unknown_immune_pop = get_unknown_immune_pop(avg_mob)
             
@@ -652,8 +653,10 @@ if len(dates_to_pred) > 0:
                 #np.max(actual)/max_infected
                 if gr < 0:
                     min_bound_beta = CURRENT_DAY_SINCE_START - 60 - delta_days
+                   
                 else:
                     min_bound_beta = CURRENT_DAY_SINCE_START + 7 - delta_days
+                    
                 
                     
                 
@@ -926,6 +929,8 @@ if len(dates_to_pred)>0:
 
             
             delta_days = CURRENT_DAY_SINCE_START - len(actual) + 1
+            max_bound_beta = max_bound_beta - delta_days
+
             PREDICTIONS_DEATHS = []
             print("growth_deaths",gr_d,delta_days,CURRENT_DAY_SINCE_START,min_bound_beta,max_bound_beta)
             if gr_d > -0.008:
