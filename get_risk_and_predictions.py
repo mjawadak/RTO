@@ -584,6 +584,7 @@ regions = df_cases[["Country/Region","country_of_state","population","vacc_perc"
 #print(sql_command)
 
 model_params = []
+random_runs = 1
 PEAK_WIN = 30
 max_bound_beta = CURRENT_DAY_SINCE_START + PEAK_WIN#1000
 max_bound_alpha = 0.1
@@ -628,7 +629,7 @@ if len(dates_to_pred) > 0:
             prev_params_item = prev_params[prev_params["Country/Region"]==country].query("country_of_state == '{}'".format(country_of_state))
 
             #actual_all = df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].values
-            actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"]  
+            actual_all = np.nan_to_num(df_cases[df_cases["Country/Region"]==country].query("country_of_state == '"+country_of_state+"' and date <= '"+max_date_cases+"'")["confirmed"].rolling(window=14).mean().values)  
             #print("---------actual_all",actual_all,len(actual_all))
             actual = copy.copy(actual_all)#[0:i]
             if vacc_perc > 1:
@@ -648,7 +649,7 @@ if len(dates_to_pred) > 0:
                 #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
                 #np.max(actual)/max_infected
                 if gr < 0:
-                    min_bound_beta = CURRENT_DAY_SINCE_START - 15
+                    min_bound_beta = CURRENT_DAY_SINCE_START - 60
                 else:
                     min_bound_beta = CURRENT_DAY_SINCE_START + 7
                 
@@ -658,7 +659,7 @@ if len(dates_to_pred) > 0:
                 alpha_best,lamda_best,beta_best=0.02,0,0
                 win_best,fg_best =0,0
                 #print(prev_params_item,len(prev_params_item))
-                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0:
+                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
                     prev_alpha = prev_params_item["alpha"].values[0]
                     prev_lamda = prev_params_item["lamda"].values[0]
                     prev_beta = prev_params_item["beta"].values[0]
@@ -667,14 +668,15 @@ if len(dates_to_pred) > 0:
                     alpha_best,lamda_best,beta_best,gamma_best = prev_alpha,prev_lamda,prev_beta,prev_gamma
                     if prev_params_item["best_score_wape"].values[0] < 0.1 and prev_params_item["best_score_wape"].values[0] > 0:
                         x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
-                        #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
-                        
+                        random_runs = 1
                     else:
                         #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                        random_runs = 3
                         x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         
                 else:
                     #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                    random_runs = 3
                     x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         
                 bounds = Bounds([min_bound_alpha,0,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
@@ -690,17 +692,18 @@ if len(dates_to_pred) > 0:
                             #actual = savgol_filter(actual_all, ma_win, 2)
                             #x0 = [0.05,np.max(actual),200]
                             #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
-                            #for j in range(3):
-                            #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
-                            res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
-                            alpha,lamda,beta,gamma = res.x
-                            current_score = cost_actual([alpha,lamda,beta,gamma])
-                            #print(ma_win,win,fg,alpha,lamda,beta,current_score)
-                            if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
-                                best_score = current_score
-                                alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
-                                win_best,fg_best = win,fg
-                
+                            for j in np.arange(random_runs):
+                                if random_runs > 1:
+                                    x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                                res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
+                                alpha,lamda,beta,gamma = res.x
+                                current_score = cost_actual([alpha,lamda,beta,gamma])
+                                #print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                                if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
+                                    best_score = current_score
+                                    alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
+                                    win_best,fg_best = win,fg
+                    
                 print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score)
 
             
@@ -872,6 +875,7 @@ print(dates_to_pred)
 
 
 model_params = []
+random_runs = 1
 best_scores_all_d = []
 best_scores_all_d_dict = {}
 #dates_to_pred= pd.date_range(start='2020-10-17', end = '2020-11-29')
@@ -928,11 +932,11 @@ if len(dates_to_pred)>0:
                 win_best,fg_best =0,0
 
                 if gr < 0:
-                    min_bound_beta = CURRENT_DAY_SINCE_START - 15
+                    min_bound_beta = CURRENT_DAY_SINCE_START - 60
                 else:
                     min_bound_beta = CURRENT_DAY_SINCE_START + 7
 
-                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0:
+                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
                     prev_alpha = prev_params_item["alpha"].values[0]
                     prev_lamda = prev_params_item["lamda"].values[0]
                     prev_beta = prev_params_item["beta"].values[0]
@@ -941,12 +945,15 @@ if len(dates_to_pred)>0:
                     alpha_best,lamda_best,beta_best,gamma_best = prev_alpha,prev_lamda,prev_beta,prev_gamma
                     if prev_params_item["best_score_wape"].values[0] < 0.1 and prev_params_item["best_score_wape"].values[0] > 0:
                         x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
+                        random_runs = 1
                     else:
                         #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                        random_runs = 3
                         x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                         
                 else:
                     #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
+                    random_runs = 3
                     x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
                 
                 bounds = Bounds([min_bound_alpha, min_bound_alpha,min_bound_beta,min_bound_gamma], [max_bound_alpha, mortality_rate*(pred_cases[-1] - pred_cases[window_for_averaging])  ,max_bound_beta+15,max_bound_gamma])#np.max(actual)/max_infected
@@ -963,16 +970,17 @@ if len(dates_to_pred)>0:
                             #actual = savgol_filter(actual_all, ma_win, 2)
                             #x0 = [0.05,actual_all[-1],200]
                             #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
-                            #for j in range(3):
-                            #x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
-                            res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")
-                            alpha,lamda,beta,gamma = res.x
-                            current_score = cost_actual([alpha,lamda,beta,gamma])
-                            #print(ma_win,win,fg,alpha,lamda,beta,current_score)
-                            if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
-                                best_score = current_score
-                                alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
-                                win_best,fg_best = win,fg
+                            for j in np.arange(random_runs):
+                                if random_runs > 1:
+                                    x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                                res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")
+                                alpha,lamda,beta,gamma = res.x
+                                current_score = cost_actual([alpha,lamda,beta,gamma])
+                                #print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                                if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
+                                    best_score = current_score
+                                    alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
+                                    win_best,fg_best = win,fg
                             
                 print(date_to_pred,country,win_best,fg_best,ma_win,alpha_best,lamda_best,beta_best,gamma_best,"best_score=",best_score) 
                 model_params.append([country,country_of_state,date_to_pred.strftime("%Y-%m-%d"),alpha_best,lamda_best,beta_best,gamma_best,best_score])
