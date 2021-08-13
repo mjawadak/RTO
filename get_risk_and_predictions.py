@@ -923,16 +923,16 @@ if len(dates_to_pred)>0:
             pred_cases = PRED_CASES_COUNTRIES[PRED_CASES_COUNTRIES["Country/Region"]==country].query("country_of_state == '"+country_of_state+"'")["pred_confirmed_cases"].values
             #- actual_all[-1]
 
-            print("growth_deaths",gr_d)
+            
             delta_days = CURRENT_DAY_SINCE_START - len(actual) + 1
             PREDICTIONS_DEATHS = []
-
+            print("growth_deaths",gr_d,delta_days,CURRENT_DAY_SINCE_START,min_bound_beta,max_bound_beta)
             if gr_d > -0.008:
                 best_score = np.inf
                 alpha_best,lamda_best,beta_best=0.02,0,0
                 win_best,fg_best =0,0
 
-                if gr < 0:
+                if gr_d < 0:
                     min_bound_beta = CURRENT_DAY_SINCE_START - 60 - delta_days
                 else:
                     min_bound_beta = CURRENT_DAY_SINCE_START + 7 - delta_days
