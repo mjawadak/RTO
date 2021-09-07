@@ -1804,7 +1804,7 @@ from
 (
 select city
     ,country_region
-    ,cast('' as varchar(10)) as country_of_state
+    ,cast('' as varchar(30)) as country_of_state
     ,date_vacc
     --,total_vaccinations
     ,total_vaccinations_new
@@ -1830,7 +1830,96 @@ select city
     inner join rto.td_sites c on b.country_region_corrected = c.country_region
     inner join rto.country_population d on b.country_region_corrected = d.country
     inner join rto.vacc_col_to_use e on b.country_region = e.country_region
+    where e.country_region <> 'India'
 ) country_data
+
+union all
+
+select city
+    ,country_region
+    ,cast('India_district' as varchar(30)) as country_of_state
+    ,cast("date" as date)
+    --,total_vaccinations
+    ,first_dose_admin as total_vaccinations_new
+    ,second_dose_admin as people_vaccinated
+    ,population
+    ,cast(second_dose_admin as float)/population as people_vacc_percent
+from rto.india_vacc_regional
+
+union all
+
+-- US vaccinations
+select city,location_corrected,'US' as country_of_state, "date",total_vaccinations,people_fully_vaccinated,population,
+people_fully_vaccinated/population as people_vacc_percent
+from 
+(
+select a.*,case when location = 'New York State' then 'New York' else location end as location_corrected,b.* 
+from (select * from rto.vaccinations_us where "date" <= (select max("date") from rto.regional_intensity_profiling) ) a 
+inner join rto.td_sites b on location_corrected = b.state_province
+) bb
+
+inner join (select state,sum(population) as population from rto.population_us group by 1) c
+on bb.location_corrected = c.state
+) tmp
+
+left join
+
+(select city,country_region,country_of_state,max(date_of_calc) as max_date_calc from rto.vacc_predictions group by 1,2,3) v_check
+on tmp.city = v_check.city and tmp.country_region = v_check.country_region and tmp.country_of_state = v_check.country_of_state
+
+order by date_vacc;select tmp.city
+    ,tmp.country_region
+    ,tmp.country_of_state
+    ,date_vacc,tmp.total_vaccinations_new
+    ,people_vaccinated
+    ,pop_country
+    ,people_vacc_percent
+    ,max_date_calc
+from 
+(
+select city
+    ,country_region
+    ,cast('' as varchar(30)) as country_of_state
+    ,date_vacc
+    --,total_vaccinations
+    ,total_vaccinations_new
+    ,case when col_to_use = 'daily_vaccinations' then 0.3*total_vaccinations_new else people_vaccinated2 end as people_vaccinated
+    ,pop_country
+    ,case when col_to_use = 'daily_vaccinations' then 0.3*total_vaccinations_new/pop_country else people_vacc_percent2 end as people_vacc_percent
+    from 
+(
+    select c.city, b.country_region,"date" as date_vacc,total_vaccinations,--col_to_use,
+    --case when people_vaccinated is null then 0.56*total_vaccinations else people_vaccinated end people_vaccinated2,
+    total_vaccinations_new,
+    people_fully_vaccinated as people_vaccinated2,
+    pop_country,
+    people_fully_vaccinated/pop_country as people_vacc_percent2,
+    col_to_use
+    --concat(cast(cast(round(100*people_vacc_percent,0) as int) as varchar(3)),'%') as people_vacc_percent_str
+    from (
+    select a.*,case when country_region = 'Czechia' then 'Czech Republic' else country_region end as country_region_corrected,
+    row_number() over(partition by country_region order by "date" desc) as row_num 
+    from (select v1.*,sum(daily_vaccinations) over (partition by country_region order by "date" rows between unbounded preceding and current row) as total_vaccinations_new from rto.vaccinations_global v1 where "date" <= (select max("date") from rto.regional_intensity_profiling)) a
+    ) b 
+    
+    inner join rto.td_sites c on b.country_region_corrected = c.country_region
+    inner join rto.country_population d on b.country_region_corrected = d.country
+    inner join rto.vacc_col_to_use e on b.country_region = e.country_region
+    where e.country_region <> 'India'
+) country_data
+
+union all
+
+select city
+    ,country_region
+    ,cast('India_district' as varchar(30)) as country_of_state
+    ,cast("date" as date)
+    --,total_vaccinations
+    ,first_dose_admin as total_vaccinations_new
+    ,second_dose_admin as people_vaccinated
+    ,population
+    ,cast(second_dose_admin as float)/population as people_vacc_percent
+from rto.india_vacc_regional
 
 union all
 
