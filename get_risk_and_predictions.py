@@ -2074,8 +2074,13 @@ for city,country_region,country_of_state,max_date_calc in df_vacc[["city","count
 try:
     
     create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
-    copy_to_sql(df=df_vacc_pred,table_name="vacc_predictions",schema_name="rto",if_exists="append")
+    copy_to_sql(df=df_vacc_pred,table_name="vacc_predictions_all",schema_name="rto",if_exists="append",primary_index = 'city')
     remove_context()
+    
+    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    copy_to_sql(df=df_vacc_pred,table_name="vacc_predictions",schema_name="rto",if_exists="replace",primary_index = 'city')
+    remove_context()
+    
     command_status = "rto.vacc_predictions updated. Predictions (Vaccinations) done."
     #logger.info("rto.vacc_predictioins updated. Predictions (Vaccinations) done.")
 except Exception as e:
