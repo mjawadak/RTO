@@ -2066,20 +2066,23 @@ for city,country_region,country_of_state,max_date_calc in df_vacc[["city","count
     
     df_v_p_tmp["country_of_state"] = country_of_state
     #print(date_of_calc,max_date_calc)
-    if max_date_calc == None or date_of_calc > max_date_calc:
-        df_vacc_pred = pd.concat((df_vacc_pred,df_v_p_tmp),axis=0)
+    #if max_date_calc == None or date_of_calc > max_date_calc:
+    
+    df_vacc_pred = pd.concat((df_vacc_pred,df_v_p_tmp),axis=0)
     
     print("vacc",city)
     #break
 try:
     if len(df_vacc_pred) > 0:
         create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+        copy_to_sql(df=df_vacc_pred,table_name="vacc_predictions",schema_name="rto",if_exists="replace",primary_index = 'city')
+        remove_context()
+
+        create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
         copy_to_sql(df=df_vacc_pred,table_name="vacc_predictions_all",schema_name="rto",if_exists="append",primary_index = 'city')
         remove_context()
         
-        create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
-        copy_to_sql(df=df_vacc_pred,table_name="vacc_predictions",schema_name="rto",if_exists="replace",primary_index = 'city')
-        remove_context()
+        
 
     command_status = "rto.vacc_predictions updated. Predictions (Vaccinations) done."
     #logger.info("rto.vacc_predictioins updated. Predictions (Vaccinations) done.")
