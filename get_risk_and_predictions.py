@@ -1904,7 +1904,7 @@ df_vacc_pred = pd.DataFrame([],columns=["city","country_region","country_of_stat
 for city,country_region,country_of_state,max_date_calc in df_vacc[["city","country_region","country_of_state","max_date_calc"]].drop_duplicates().sort_values("city").values:
     # 
     
-    df_vacc.loc[df_vacc.query("city == '{}'".format(city)).index,"people_vacc_percent"] = df_vacc.query("city == '{}'".format(city))["people_vacc_percent"].fillna(method='ffill').values#.plot()
+    df_vacc.loc[df_vacc.query("city == '{}'".format(city)).index,"people_vacc_percent"] = df_vacc.query("city == '{}'".format(city))["people_vacc_percent"].replace({0:np.nan}).fillna(method='ffill').values#.plot()
     dates_vacc = df_vacc.query("city == '{}'".format(city))["date_vacc"]
     days = dates_vacc.sub(datetime.datetime.strptime("2020-01-01","%Y-%m-%d")).dt.days
     date_of_calc = dates_vacc.iloc[-1].strftime("%Y-%m-%d")
