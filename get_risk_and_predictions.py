@@ -1,4 +1,5 @@
 '''
+TEMP FIX:  Added a temporary fix to use country data for India sites due to a problem with the source for rto.daily_india_districts since 31-10-2021.
 Version: optimizing on daily difference with death correction and SG_Filter, optimizing with vacc data as well. Added an exp model -> Used when the growth rate is negative.
 This code has been tested on Python3.6 and can an hour to execute.
 In this script, we calculate the intensity score and predictions (cases and deaths) for COVID-19 in different regions.
@@ -168,6 +169,21 @@ import teradatasql
 connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
 cur = connection.cursor()
 
+
+'''
+# code for india districts data. Not working since 31 oct 2021 since data not populated in the source.
+select "date",a.state,country_of_state, confirmed, deaths, population from
+    (select "date",state,'India' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india_districts group by 1,2,3) a
+    inner join (select state,population from rto.population_india_states where state = 'Telangana') b
+    on a.state = b.state
+
+    union all
+
+    select "date",a.district,country_of_state, confirmed, deaths, population from
+    (select "date",district,'India_district' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india_districts group by 1,2,3) a
+    inner join (select district,population from rto.population_india_districts where district <>  'Hyderabad') b
+    on a.district = b.district
+'''
 cur.execute("""
 select main_data.*,vacc_data.pred_vacc_perc as vacc_perc,mob.avg_mob from 
 (
@@ -193,17 +209,19 @@ select main_data.*,vacc_data.pred_vacc_perc as vacc_perc,mob.avg_mob from
 
     union all
 
-    select "date",a.state,country_of_state, confirmed, deaths, population from
-    (select "date",state,'India' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india_districts group by 1,2,3) a
-    inner join (select state,population from rto.population_india_states where state = 'Telangana') b
-    on a.state = b.state
+    select "date",b.state,country_of_state, confirmed, deaths, population from
+    (select "date","Country/Region",'India' as country_of_state, confirmed, deaths from rto.daily_global where "Country/Region" = 'India') a
+    inner join (select country, case when country = 'India' then 'Telangana' end as state, pop_country as population from rto.country_population where country = 'India') b
+    on a."Country/Region" = b.country
 
     union all
 
-    select "date",a.district,country_of_state, confirmed, deaths, population from
-    (select "date",district,'India_district' as country_of_state,sum(confirmed) as confirmed,sum(deaths) as deaths from rto.daily_india_districts group by 1,2,3) a
-    inner join (select district,population from rto.population_india_districts where district <>  'Hyderabad') b
-    on a.district = b.district
+    select "date",b.district,country_of_state, confirmed, deaths, population from
+    (select "date","Country/Region" as country,'India_district' as country_of_state,confirmed, deaths from rto.daily_global where "Country/Region" = 'India') a
+    inner join (select 'India' as country1, district,pop_country as population from rto.population_india_districts 
+                inner join rto.country_population cp on cp.country = country1
+                where district <>  'Hyderabad') b
+    on a.country = b.country1
 
     union all 
 
@@ -281,8 +299,8 @@ else:
     select max("date") as max_date from rto.daily_us
     --union all 
     --select max("date") as max_date from rto.daily_india
-    union all 
-    select max("date") as max_date from rto.daily_india_districts
+    --union all 
+    --select max("date") as max_date from rto.daily_india_districts
     union all
     select max("date") as max_date from rto.stg_daily_global_province
     )as tmp;""")
@@ -563,8 +581,8 @@ else:
     select max("date") as max_date from rto.daily_us
     --union all 
     --select max("date") as max_date from rto.daily_india
-    union all 
-    select max("date") as max_date from rto.daily_india_districts
+    --union all 
+    --select max("date") as max_date from rto.daily_india_districts
     union all
     select max("date") as max_date from rto.stg_daily_global_province
     )as tmp;""").to_pandas().iloc[0,0]
@@ -1125,6 +1143,23 @@ logger.info("rto.LG_predicted_deaths updated. Predictions (deaths) done.")
 ############################################### TD Site Analysis Dashboard #########################################################
 
 
+'''
+# code for india districts data. Not working since 31 oct 2021 since data not populated in the source (`rto.daily_india_districts)
+select distinct state as "Country/Region",population from rto.population_india_states aa
+    inner join
+    (select * from rto.td_sites where country_region ='India') bb
+    on aa.state = bb.state_province
+    where state = 'Telangana'
+
+    union all 
+
+    select distinct district as "Country/Region",population from rto.population_india_districts aa
+    inner join
+    (select * from rto.td_sites where country_region ='India') bb
+    on aa.state = bb.state_province
+    where district <>  'Hyderabad'
+'''
+
 import teradatasql
 connection = teradatasql.connect(host="tdprd.td.teradata.com", user="RTO_SVC_ACCT", password="svcOct2020#1008")
 cur = connection.cursor()
@@ -1151,19 +1186,19 @@ select aaa.*,ddd.country_of_state,ddd."date",ddd.pred_confirmed_cases as confirm
     
     union all 
     
-    select distinct state as "Country/Region",population from rto.population_india_states aa
+    select distinct bb.state_province as "Country/Region",pop_country as population from rto.country_population aa
     inner join
     (select * from rto.td_sites where country_region ='India') bb
-    on aa.state = bb.state_province
-    where state = 'Telangana'
+    on aa.country = bb.country_region
+    where bb.state_province = 'Telangana'
+    
+    union all
 
-    union all 
-
-    select distinct district as "Country/Region",population from rto.population_india_districts aa
+    select distinct county_district as "Country/Region",pop_country as population from rto.country_population aa
     inner join
     (select * from rto.td_sites where country_region ='India') bb
-    on aa.state = bb.state_province
-    where district <>  'Hyderabad'
+    on aa.country = bb.country_region
+    where bb.county_district <>  'Hyderabad'
     
     union all
     
