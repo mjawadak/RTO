@@ -63,6 +63,8 @@ logger.addHandler(fh)
 #logger.info("starting")
 #exit()
 
+DEBUG_MODE = 0
+
 '''def delete_entries(date_of_calc):
 
     """delete from rto.regional_intensity_profiling where "date">'{}';
@@ -413,6 +415,85 @@ logger.info("rto.regional_intensity_profiling' done. Risk Calculated till the la
 
 ###################################################### for prediction modeling #####################################################
 
+
+####### build a model to predict the days to peak given the current daily cases and growth rate
+
+df_gr = get_sql_df("select * from rto.regional_intensity_profiling")
+
+Cmax_arr = []
+df_gr_model_arr = []
+for case_death in [("growth_rate","daily_cases"),("growth_rate_deaths","daily_deaths")]:
+    print(case_death)
+    
+    Cmax = []
+    df_gr_model = []
+    regions = df_cases[["Country/Region","country_of_state","population"]].drop_duplicates(subset=["Country/Region","country_of_state"]).sort_values(by="Country/Region")
+    for row in regions[["Country/Region","country_of_state","population"]].values:
+        region,country_of_state,pop = row
+        df_gr2 = df_gr[df_gr["Country/Region"]==region].query("country_of_state == '{}'".format(country_of_state))
+        g = df_gr2[case_death[0]].values
+        v = df_gr2[case_death[1]].values
+        C = []
+        for i in range(len(g)):
+            c = 0
+            gr_neg = False
+            if g[i] > 0: 
+                for j in range(i,len(g)):
+                    if g[j] < 0:
+                        gr_neg = True
+                        break
+                    c = c + 1
+            if gr_neg == False:
+                c = -1
+            #print(i,g[i],c)
+            if (c>0):
+                df_gr_model.append([g[i],c,v[i]])
+            C.append(c)
+        #plt.plot(g)
+        Cmax.append(max(C))
+        #print(len(g),region,country_of_state,max(C))
+        
+    Cmax_arr.append(Cmax)
+    df_gr_model_arr.append(df_gr_model)
+df_gr_model_cases = df_gr_model_arr[0]
+df_gr_model_deaths = df_gr_model_arr[1]
+
+
+df_gr_model_cases = pd.DataFrame(df_gr_model_cases,columns=["growth_rate","days_to_peak","daily_cases"])
+df_gr_model_deaths = pd.DataFrame(df_gr_model_deaths,columns=["growth_rate","days_to_peak","daily_deaths"])
+print(df_gr_model_cases.shape,df_gr_model_deaths.shape)
+
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
+clf_case_peak = RandomForestRegressor()
+clf_death_peak = RandomForestRegressor()
+
+
+
+
+for case_death in [("daily_cases",clf_case_peak,df_gr_model_cases),
+                   ("daily_deaths",clf_death_peak,df_gr_model_deaths)]:
+    
+    X = case_death[2][["growth_rate",case_death[0]]]
+    y = case_death[2]["days_to_peak"]
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
+
+    case_death[1].fit(X_train,y_train)
+    y_pred = case_death[1].predict(X_test)
+    mae = mean_absolute_error(y_pred,y_test)
+    print(mae)
+    
+    case_death[1].fit(X,y)
+    
+    y_pred = case_death[1].predict(X_test)
+    mae = mean_absolute_error(y_pred,y_test)
+    print(mae)
+#################
+
+
+
 # for prediction modeling
 
 from scipy.optimize import Bounds
@@ -537,16 +618,20 @@ def get_shape_trend(data):
 ############################################################# Case predictions: ####################################################
 
 def get_dates_to_pred(table_name):
-    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    
+    if DEBUG_MODE == 0:
+        create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+        max_date_previous=DataFrame.from_query("""select max(date_of_calc) as max_date_previous from rto.{} where "Country/Region" = 'Zimbabwe'""".format(table_name)).to_pandas()
+        max_date_previous=max_date_previous["max_date_previous"].values[0]
+        print("max_date_previous",max_date_previous,type(max_date_previous))
+        if type(max_date_previous) == str:
+            max_date_previous = datetime.datetime.strptime(max_date_previous,"%Y-%m-%d")
+        remove_context()
+    else:
+        max_date_previous = MAX_DATE_CASES
+        max_date_previous = max_date_previous - datetime.timedelta(days=1)
 
-    max_date_previous=DataFrame.from_query("""select max(date_of_calc) as max_date_previous from rto.{} where "Country/Region" = 'Zimbabwe'""".format(table_name)).to_pandas()
-    max_date_previous=max_date_previous["max_date_previous"].values[0]
-    print("max_date_previous",max_date_previous,type(max_date_previous))
-    if type(max_date_previous) == str:
-        max_date_previous = datetime.datetime.strptime(max_date_previous,"%Y-%m-%d")
-
-
-    remove_context()
+    
 
     dates_to_pred= pd.date_range(start=(max_date_previous+datetime.timedelta(days=1)).strftime("%Y-%m-%d"), 
                                  end = MAX_DATE_CASES.strftime("%Y-%m-%d"))#str(np.datetime_as_string(MAX_DATE_CASES,unit='D'))
@@ -561,6 +646,7 @@ def delete_partial_update(table_name,max_date_previous):
     cur.close()
 
 from matplotlib.backends.backend_pdf import PdfPages  
+
 pp = PdfPages('predictions_{}.pdf'.format(str(max_date_cases_tab)))
 
 # Case predictions:
@@ -569,7 +655,7 @@ print("Calculating Predictions")
 window_for_averaging = 15#14
 
 
-if len(sys.argv) == 2:
+'''if len(sys.argv) == 2:
     MAX_DATE_CASES = datetime.datetime.strptime(sys.argv[1],"%Y-%m-%d").date()
 else:
     create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
@@ -586,8 +672,9 @@ else:
     union all
     select max("date") as max_date from rto.stg_daily_global_province
     )as tmp;""").to_pandas().iloc[0,0]
-    remove_context()
+    remove_context()'''
 
+MAX_DATE_CASES = datetime.datetime.strptime(max_date_cases_tab,"%Y-%m-%d").date()
 CURRENT_DAY_SINCE_START = (MAX_DATE_CASES - dates[0].date()).days
 
 dates_to_pred,max_date_previous = get_dates_to_pred("LG_predicted_cases")
@@ -606,11 +693,11 @@ regions = df_cases[["Country/Region","country_of_state","population","vacc_perc"
 
 def init_params():
     global PEAK_WIN,max_bound_beta,max_bound_alpha,min_bound_alpha,min_bound_beta,min_bound_gamma,max_bound_gamma,min_bound_lambda
-    PEAK_WIN = 30
+    PEAK_WIN = 60
     max_bound_beta = CURRENT_DAY_SINCE_START + PEAK_WIN#1000
     max_bound_alpha = 0.1
     min_bound_alpha = 0.01
-    min_bound_beta = 200#CURRENT_DAY_SINCE_START #300 #200
+    min_bound_beta = 600#CURRENT_DAY_SINCE_START #300 #200
     min_bound_gamma = 1.0
     max_bound_gamma = 1.0
     min_bound_lambda = 0
@@ -630,9 +717,10 @@ best_scores_all_dict = {}
 print(dates_to_pred)
 if len(dates_to_pred) > 0:
     # to remove any partial values
-    delete_partial_update("LG_predicted_cases",max_date_previous)
+    if DEBUG_MODE == 0:
+        delete_partial_update("LG_predicted_cases",max_date_previous)
 
-    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+        create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
     
     
 
@@ -653,6 +741,8 @@ if len(dates_to_pred) > 0:
             
         #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
         #regions = regions[regions["Country/Region"]  == 'Pune']
+        #regions = regions[regions["Country/Region"].isin(TD_countries)]#regions[regions["Country/Region"]  in ['Italy',"Denmark"]]
+        #regions = regions[regions["Country/Region"]  == 'China']
         for country,country_of_state,population,vacc_perc,avg_mob in regions.values:
             init_params()
             #sprint(date_to_pred,country,"_",vacc_perc)
@@ -674,13 +764,24 @@ if len(dates_to_pred) > 0:
             delta_days = CURRENT_DAY_SINCE_START - len(actual) + 1
 
             max_bound_beta = max_bound_beta - delta_days
+            max_bound_beta = CURRENT_DAY_SINCE_START + PEAK_WIN - delta_days
             #min_bound_beta = CURRENT_DAY_SINCE_START - delta_days
-            print("growth",gr,delta_days,CURRENT_DAY_SINCE_START,min_bound_beta,max_bound_beta)
-            if gr > -0.008:
-                unknown_immune_pop = get_unknown_immune_pop(avg_mob)
+            #print("growth",gr,delta_days,CURRENT_DAY_SINCE_START,min_bound_beta,max_bound_beta)
+            current_daily_cases = actual_all[-1] - actual_all[-2]
+            days_to_peak_pred = clf_case_peak.predict([[gr,current_daily_cases]])[0]
+            print("days_to_peak_pred",current_daily_cases,gr,days_to_peak_pred)
+            min_bound_beta = CURRENT_DAY_SINCE_START + days_to_peak_pred - delta_days
+            max_bound_beta = CURRENT_DAY_SINCE_START + days_to_peak_pred + 20 - delta_days
             
+            if gr > -0.008:
+                #unknown_immune_pop = get_unknown_immune_pop(avg_mob)
+                unknown_immune_pop = 1
                 #print(vacc_perc,avg_mob,unknown_immune_pop)
-                suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + 1.3*vacc_perc*population) )
+                suscepible_pop = unknown_immune_pop * ( population - (np.max(actual) + 1.0*vacc_perc*population) )
+                print("vacc_perc*population",vacc_perc*population)
+                print("np.max(actual)",np.max(actual))
+                print("population",population)
+                print("unknown_immune_pop",unknown_immune_pop)
                 #suscepible_pop = population - (np.max(actual) + vacc_perc*population)
                 #np.max(actual)/max_infected
                 '''if gr < 0:
@@ -690,20 +791,23 @@ if len(dates_to_pred) > 0:
                     min_bound_beta = CURRENT_DAY_SINCE_START + 7'''
                     
                 
-                    
+                
+                
                 
                 best_score = np.inf
                 alpha_best,lamda_best,beta_best=0.02,0,0
                 win_best,fg_best =0,0
-                #print(prev_params_item,len(prev_params_item))
-                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
+                print(prev_params_item,len(prev_params_item))
+                if 1:#len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
                     prev_alpha = prev_params_item["alpha"].values[0]
                     prev_lamda = prev_params_item["lamda"].values[0]
                     prev_beta = prev_params_item["beta"].values[0]
                     prev_gamma = prev_params_item["gamma"].values[0]
-                    best_score = prev_params_item["best_score_wape"].values[0]
+                    best_score = cost_actual([prev_alpha,prev_lamda,prev_beta,prev_gamma])
+                    #prev_params_item["best_score_wape"].values[0]
+                    
                     alpha_best,lamda_best,beta_best,gamma_best = prev_alpha,prev_lamda,prev_beta,prev_gamma
-                    if prev_params_item["best_score_wape"].values[0] < 0.1 and prev_params_item["best_score_wape"].values[0] > 0:
+                    if best_score < 0.1 and prev_params_item["best_score_wape"].values[0] > 0:
                         x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
                         random_runs = 1
                     else:
@@ -715,10 +819,15 @@ if len(dates_to_pred) > 0:
                     #x0 = [0.05,np.max(actual),max_bound_beta-PEAK_WIN/2.,1]
                     random_runs = 3
                     x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
-                        
-                bounds = Bounds([min_bound_alpha,min_bound_lambda,min_bound_beta,min_bound_gamma],[max_bound_alpha, suscepible_pop,max_bound_beta,max_bound_gamma])
-
-                print("x0:",x0,",bounds:",bounds,best_score)
+                
+                print("prev_best:",best_score)
+                
+                bounds = Bounds([min_bound_alpha,min_bound_lambda,min_bound_beta,min_bound_gamma],
+                                [max_bound_alpha, suscepible_pop+np.max(actual_all),max_bound_beta,max_bound_gamma])
+                print("CURRENT_DAY_SINCE_START",CURRENT_DAY_SINCE_START,"delta_days",delta_days)
+                print(bounds)
+                print("suscepible_pop",suscepible_pop)
+                #print("x0:",x0,",bounds:",bounds,best_score,random_runs)
                 for ma_win in MA_WINDOWS:
                     for fg in FORGET_FACTORS:
                         forget_factor = fg
@@ -730,12 +839,18 @@ if len(dates_to_pred) > 0:
                             #x0 = [0.05,np.max(actual),200]
                             #x0 = [np.random.uniform(0,0.1),np.max(actual_all),np.random.uniform(0,1000)]
                             for j in np.arange(random_runs):
-                                if random_runs > 1:
-                                    x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),np.max(actual_all),np.random.uniform(min_bound_beta,max_bound_beta),np.random.uniform(min_bound_gamma,max_bound_gamma)]
+                                #if random_runs > 1:
+                                x0 = [np.random.uniform(min_bound_alpha,max_bound_alpha),
+                                      np.random.uniform(min_bound_lambda,suscepible_pop+np.max(actual_all)),np.random.uniform(min_bound_beta,max_bound_beta),
+                                      np.random.uniform(min_bound_gamma,max_bound_gamma)]
+
                                 res = optimize.minimize(fun=cost_predictions,x0=x0,bounds=bounds,method="L-BFGS-B")#method="Nelder-Mead")#,method='Nelder-Mead')
                                 alpha,lamda,beta,gamma = res.x
                                 current_score = cost_actual([alpha,lamda,beta,gamma])
-                                #print(ma_win,win,fg,alpha,lamda,beta,current_score)
+                                #print(x0[1],suscepible_pop)
+                                #print(bounds,x0)
+                                print(ma_win,win,fg,alpha,lamda,beta,"current_score",current_score)
+                                
                                 if current_score < best_score:# and (alpha_best > 0.01 or alpha > 0.01):
                                     best_score = current_score
                                     alpha_best,lamda_best,beta_best,gamma_best = alpha,lamda,beta,gamma
@@ -792,9 +907,18 @@ if len(dates_to_pred) > 0:
                 plt.plot(pd.to_datetime(p["date"]),p["pred_confirmed_cases"].diff())
                 plt.plot(a["date"],[0]+list(np.diff(actual_all)))
                 plt.subplots_adjust(top=0.8)
+                if DEBUG_MODE == 1:
+                    plt.show()
                 pp.savefig(fig)
-                #plt.show()
                 plt.close()
+                
+                if DEBUG_MODE == 1:
+                    plt.figure()
+                    plt.plot(pd.to_datetime(p["date"]),p["pred_confirmed_cases"])
+                    plt.plot(a["date"],list(actual_all))
+                    plt.show()
+                    plt.close()
+
 
         #end_dates_countries = pd.DataFrame(end_dates_countries,columns=["Country/Region","country_of_state","date_of_calc","pred_end_date","pred_days_remaining_in_epidemic"])
         
@@ -803,8 +927,8 @@ if len(dates_to_pred) > 0:
         
         
         #copy_to_sql(df=end_date_all,table_name="LG_predicted_end_dates",schema_name="rto",if_exists="append",primary_index="Country/Region")
-        
-        copy_to_sql(df=predicted_cases_countries,table_name="LG_predicted_cases",schema_name="rto",if_exists="append",primary_index="Country/Region")
+        if DEBUG_MODE == 0:
+            copy_to_sql(df=predicted_cases_countries,table_name="LG_predicted_cases",schema_name="rto",if_exists="append",primary_index="Country/Region")
 else:
     #create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
     PRED_CASES_COUNTRIES = get_sql_df("""select * from rto.LG_predicted_cases where date_of_calc = (select max(date_of_calc) from rto.LG_predicted_cases);""")
@@ -812,7 +936,8 @@ else:
 
 if len(model_params) > 0:
     model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","gamma","best_score_wape"])
-    copy_to_sql(df=model_params,table_name="LG_predicted_cases_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
+    if DEBUG_MODE == 0:
+        copy_to_sql(df=model_params,table_name="LG_predicted_cases_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
     ### save the scores in terms of a histogram and a cdf
     best_scores_all_dict[PEAK_WIN] = best_scores_all
     print("Overrall average WAPE (TD sites):",np.average(best_scores_all))
@@ -822,6 +947,8 @@ if len(model_params) > 0:
     plt.plot((100*_bin[1:]).astype(int),np.cumsum(_hist)/np.sum(_hist))
     plt.xlabel("WAPE (%)")
     plt.ylabel("CDF")
+    if DEBUG_MODE == 1:
+        plt.show()
     pp.savefig(fig)
     plt.close()
 
@@ -830,10 +957,13 @@ if len(model_params) > 0:
     sns.barplot((100*_bin[1:]).astype(int),_hist)
     plt.xlabel("WAPE (%)")
     plt.ylabel("count")
+    if DEBUG_MODE == 1:
+        plt.show()
     pp.savefig(fig)
     plt.close()
 
 try:
+    
     remove_context()
 except Exception as e:
     pass
@@ -908,6 +1038,8 @@ regions = df_cases[["Country/Region","country_of_state","population"]].drop_dupl
 
 dates_to_pred,max_date_previous = get_dates_to_pred("LG_predicted_deaths")
 
+    
+    
 print(dates_to_pred)
 
 
@@ -922,10 +1054,11 @@ if len(dates_to_pred)>0:
                                 from rto.LG_predicted_deaths_params a where date_of_calc > (select max(date_of_calc) from rto.LG_predicted_deaths_params)-7) tmp
                                 where rank_score =1;""")
 
-    # to remove any partial values
-    delete_partial_update("LG_predicted_deaths",max_date_previous)
-    
-    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    if DEBUG_MODE == 0:
+        # to remove any partial values
+        delete_partial_update("LG_predicted_deaths",max_date_previous)
+        create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+        
     for date_to_pred in dates_to_pred:
         max_date_cases = date_to_pred.strftime("%Y-%m-%d")
         #max_date_cases = df_cases["date"].values[-1]
@@ -937,6 +1070,9 @@ if len(dates_to_pred)>0:
         #MA_WINDOWS = [3,5]#7,15]#[2,7,14]
             
         #for country in regions.query("country_of_state == 'US'")["Country/Region"].values:#["United States"]:#countries
+        #regions = regions[regions["Country/Region"]  == 'France']
+        #regions = regions[regions["Country/Region"].isin(TD_countries)]
+        #regions = regions[regions["Country/Region"]  == 'China']
         for country,country_of_state,population in regions.values:
             print(date_to_pred,country)
             init_params()
@@ -982,7 +1118,8 @@ if len(dates_to_pred)>0:
                     prev_lamda = prev_params_item["lamda"].values[0]
                     prev_beta = prev_params_item["beta"].values[0]
                     prev_gamma = prev_params_item["gamma"].values[0]
-                    best_score = prev_params_item["best_score_wape"].values[0]
+                    best_score = cost_actual([prev_alpha,prev_lamda,prev_beta,prev_gamma])
+                    #best_score = prev_params_item["best_score_wape"].values[0]
                     alpha_best,lamda_best,beta_best,gamma_best = prev_alpha,prev_lamda,prev_beta,prev_gamma
                     if prev_params_item["best_score_wape"].values[0] < 0.1 and prev_params_item["best_score_wape"].values[0] > 0:
                         x0 = [ prev_alpha, prev_lamda, prev_beta, prev_gamma ]
@@ -1089,6 +1226,8 @@ if len(dates_to_pred)>0:
                 plt.plot(pd.to_datetime(p["date"]),p["pred_deaths"].diff())
                 plt.plot(a["date"],[0]+list(np.diff(actual_all)))
                 plt.subplots_adjust(top=0.8)
+                if DEBUG_MODE == 1:
+                    plt.show()
                 pp.savefig(fig)
                 plt.close()
                 #plt.show()
@@ -1097,15 +1236,18 @@ if len(dates_to_pred)>0:
         
         PRED_DEATHS_COUNTRIES = pd.concat((PRED_DEATHS_COUNTRIES,predicted_deaths_countries),axis=0)
             
-        
-        copy_to_sql(df=predicted_deaths_countries,table_name="LG_predicted_deaths",schema_name="rto",if_exists="append",primary_index="Country/Region")
+        if DEBUG_MODE == 0:
+            copy_to_sql(df=predicted_deaths_countries,table_name="LG_predicted_deaths",schema_name="rto",if_exists="append",primary_index="Country/Region")
 else:
-    create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+    if DEBUG_MODE == 0:
+        create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
     print("rto.LG_predicted_deaths already updated")
 
 if len(model_params) > 0:
     model_params = pd.DataFrame(model_params,columns=["Country/Region","country_of_state","date_of_calc","alpha","lamda","beta","gamma","best_score_wape"])
-    copy_to_sql(df=model_params,table_name="LG_predicted_deaths_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
+    
+    if DEBUG_MODE == 0:
+        copy_to_sql(df=model_params,table_name="LG_predicted_deaths_params",schema_name="rto",if_exists="append",primary_index="Country/Region")
     print("Overrall average WAPE (TD sites) [DEATHS]:",np.average(best_scores_all_d))
     _hist,_bin = np.histogram(best_scores_all_d,bins= np.linspace(0,1.0,21))
     fig = plt.figure()
@@ -1113,18 +1255,22 @@ if len(model_params) > 0:
     plt.plot((100*_bin[1:]).astype(int),np.cumsum(_hist)/np.sum(_hist))
     plt.xlabel("WAPE (%)")
     plt.ylabel("CDF")
+    if DEBUG_MODE == 1:
+        plt.show()
     pp.savefig(fig)
     plt.close()
-
     fig = plt.figure()
     plt.title("Avg WAPE ={:.4f}".format(np.average(best_scores_all_d)))
     sns.barplot((100*_bin[1:]).astype(int),_hist)
     plt.xlabel("WAPE (%)")
     plt.ylabel("count")
+    if DEBUG_MODE == 1:
+        plt.show()
     pp.savefig(fig)
     plt.close()
 
-remove_context()
+if DEBUG_MODE == 0:
+    remove_context()
 
 pp.close()
 
@@ -1865,9 +2011,10 @@ select city
     inner join rto.td_sites c on b.country_region_corrected = c.country_region
     inner join rto.country_population d on b.country_region_corrected = d.country
     inner join rto.vacc_col_to_use e on b.country_region = e.country_region
-    where e.country_region <> 'India'
+    --where e.country_region <> 'India'
 ) country_data
 
+/*
 union all
 
 select city
@@ -1880,6 +2027,7 @@ select city
     ,population
     ,cast(second_dose_admin as float)/population as people_vacc_percent
 from rto.india_vacc_regional
+*/
 
 union all
 
