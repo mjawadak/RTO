@@ -798,7 +798,7 @@ if len(dates_to_pred) > 0:
                 alpha_best,lamda_best,beta_best=0.02,0,0
                 win_best,fg_best =0,0
                 print(prev_params_item,len(prev_params_item))
-                if 1:#len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
+                if len(prev_params_item)>0:# and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
                     prev_alpha = prev_params_item["alpha"].values[0]
                     prev_lamda = prev_params_item["lamda"].values[0]
                     prev_beta = prev_params_item["beta"].values[0]
@@ -1113,7 +1113,7 @@ if len(dates_to_pred)>0:
                 else:
                     min_bound_beta = CURRENT_DAY_SINCE_START + 7'''
 
-                if len(prev_params_item)>0 and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
+                if len(prev_params_item)>0:# and prev_params_item["beta"].values[0] != -1 and prev_params_item["best_score_wape"].values[0] > 0 and prev_params_item["beta"].values[0] >=min_bound_beta and prev_params_item["beta"].values[0] <= max_bound_beta:
                     prev_alpha = prev_params_item["alpha"].values[0]
                     prev_lamda = prev_params_item["lamda"].values[0]
                     prev_beta = prev_params_item["beta"].values[0]
