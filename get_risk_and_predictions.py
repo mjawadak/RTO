@@ -529,7 +529,7 @@ def cost_actual(params,model_type = 'LG'):
     win_actual = window_for_averaging#2*window_for_averaging
     den = float(np.average(actual2[-win_actual:]))
     
-
+    #print("den", den)
     
     if model_type == 'LG':
         win_actual = window_for_averaging#2*window_for_averaging
@@ -2209,7 +2209,24 @@ remove_context()
 
 
 
+################################################### Fetch Population Data ###############################################
+import pandas as pd
+from teradataml import copy_to_sql,create_context,remove_context,fastload
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 
+
+
+
+df = pd.read_csv("https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/hospitalizations/covid-hospitalizations.csv")
+
+create_context(host="tdprd.td.teradata.com",username="RTO_SVC_ACCT", password="svcOct2020#1008")
+fastload(df=df,table_name="hospital_data_global",schema_name="rto",if_exists="REPLACE",primary_index="entity")
+remove_context()
+
+print("rto.hospital_data_global. Fetched and Loaded Hospital Data.")
+
+######################################################################################################################
 
 
 
